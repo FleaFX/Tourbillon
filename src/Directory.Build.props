@@ -1,0 +1,27 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix>preview.1</VersionSuffix>
+    <GenerateDocumentationFile Condition="'$(IsPackable)' != 'false'">true</GenerateDocumentationFile>
+    <Authors>Wouter Naessens</Authors>
+    <Copyright>Copyright © 2026 Wouter Naessens</Copyright>
+    <PackageProjectUrl>https://github.com/FleaFX/Tourbillon</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/FleaFX/Tourbillon</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile Condition="'$(IsPackable)' != 'false'">README.md</PackageReadmeFile>
+    <PackageTags>raft;consensus;log;wal;replication</PackageTags>
+    <IncludeSymbols Condition="'$(IsPackable)' != 'false'">true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(IsPackable)' != 'false'">
+    <None Include="$(MSBuildThisFileDirectory)..\README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>
