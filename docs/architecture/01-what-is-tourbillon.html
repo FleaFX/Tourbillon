@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>What is Tourbillon</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<article>
+  <p class="kicker">Chapter 1</p>
+  <h1>What is Tourbillon</h1>
+
+
+  <div class="summary">
+    <strong>In three sentences</strong>
+    <p>Tourbillon keeps a log on disk that survives a crash, and copies it over several machines so that they agree on what is in it, even when one of them fails. A program hands an entry to Tourbillon; once Tourbillon calls it accepted, the entry is safe, and every machine gets it at the same place in the same order. Tourbillon does not know what the entries mean: the program that uses it turns them into its own state.</p>
+  </div>
+
+  <h2>The problem</h2>
+  <p>Some programs must never forget what they were told. A replicated database must keep every change it confirmed; an event store must keep every event it accepted; a message broker must keep every message until it is delivered. Such a program needs two things:</p>
+  <ul>
+    <li><strong>A place where written means written.</strong> Once it has said "stored", a crash or a power failure must not take it back.</li>
+    <li><strong>Agreement between machines.</strong> With several machines, so that one can fail without anything stopping, they must agree on what was written and in which order, also when a machine fails halfway or the network between them breaks.</li>
+  </ul>
+  <p>Both are hard to get right, and a mistake rarely shows: everything works, until one day a power failure or an unlucky moment loses something that was called safe. Two programs need both: the event store MSSP and the message broker Remontoire. So the hard part is built once, tested hard, and shared: that is Tourbillon.</p>
+
+  <h2>What Tourbillon does</h2>
+  <p>A program that uses Tourbillon, the user, does not write to disk or talk to other machines itself. It hands its entries to Tourbillon, and gets back the accepted entries, in order, to build its state from.</p>
+
+  <figure>
+    <svg viewBox="0 0 680 250" role="img" aria-labelledby="fig1-title">
+      <title id="fig1-title">The user hands an entry to Tourbillon, Tourbillon stores it on disk on most of its machines, and then hands the accepted entry back to the user on every machine, in order.</title>
+      <defs>
+        <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+      </defs>
+
+      <rect class="box" x="1" y="65" width="168" height="120" rx="8"/>
+      <text class="label" x="85" y="118" text-anchor="middle">The user</text>
+      <text class="note" x="85" y="140" text-anchor="middle">such as MSSP</text>
+      <text class="note" x="85" y="158" text-anchor="middle">or Remontoire</text>
+
+      <rect class="box-main" x="256" y="20" width="200" height="210" rx="8"/>
+      <text class="label" x="356" y="48" text-anchor="middle">Tourbillon</text>
+      <rect class="box" x="276" y="64" width="160" height="44" rx="6"/>
+      <text class="note" x="356" y="91" text-anchor="middle">machine 1: log on disk</text>
+      <rect class="box" x="276" y="118" width="160" height="44" rx="6"/>
+      <text class="note" x="356" y="145" text-anchor="middle">machine 2: copy</text>
+      <rect class="box" x="276" y="172" width="160" height="44" rx="6"/>
+      <text class="note" x="356" y="199" text-anchor="middle">machine 3: copy</text>
+
+      <rect class="box" x="511" y="65" width="168" height="120" rx="8"/>
+      <text class="label" x="595" y="118" text-anchor="middle">Its state</text>
+      <text class="note" x="595" y="140" text-anchor="middle">built from the</text>
+      <text class="note" x="595" y="158" text-anchor="middle">accepted entries</text>
+
+      <path class="arrow" d="M171,100 L252,100"/>
+      <text class="step" x="212" y="89" text-anchor="middle">1 propose</text>
+
+      <path class="arrow" d="M252,150 L171,150"/>
+      <text class="step" x="212" y="172" text-anchor="middle">2 accepted</text>
+
+      <path class="arrow" d="M458,125 L507,125"/>
+      <text class="step" x="483" y="114" text-anchor="middle">3</text>
+    </svg>
+    <figcaption>Figure 1. The user proposes an entry, Tourbillon accepts it once it is safe, and hands it back in order to build the user's state.</figcaption>
+  </figure>
+
+  <ol class="steps">
+    <li><strong>Propose.</strong> The user hands an entry to Tourbillon: a piece of bytes, such as an event to store or an acknowledgement of a message.</li>
+    <li><strong>Accepted.</strong> Tourbillon writes the entry to disk, on most of its machines when there are several, and only then answers "accepted", with the number of the entry in the log. If that is not possible, the user gets an error, and nothing was accepted.</li>
+    <li><strong>Apply.</strong> On every machine, Tourbillon hands the accepted entries to the user, in the order of the log. The user applies them to its own state. Because every machine gets the same entries in the same order, they all end up with the same state.</li>
+  </ol>
+  <p>One machine is enough to use Tourbillon. It then keeps one log, without copies, and every promise of chapter 2 still holds. More machines only add that one of them may fail (chapter 4).</p>
+
+  <div class="promises">
+    <strong>What must always be true</strong>
+    <ul>
+      <li>An entry Tourbillon called accepted is not lost by a crash or a power failure, and not by the failure of fewer than half of the machines.</li>
+      <li>An accepted entry never changes, and keeps its number in the log.</li>
+      <li>Every machine hands the user the same accepted entries, in the same order, and never an entry that was not accepted.</li>
+      <li>An accepted entry stays until the user says it may go (chapter 3).</li>
+    </ul>
+  </div>
+
+  <h2>Who uses it</h2>
+  <ul>
+    <li><strong>Remontoire</strong>, the message broker, keeps every partition of a stream as a log of its own in Tourbillon, and also its register: what it knows about its machines, streams and groups. The messages themselves stay in the log until the retention of their stream lets them go.</li>
+    <li><strong>MSSP</strong>, the event store, keeps one log for all its events. Its own storage on disk is built from that log. MSSP moves onto Tourbillon after its own architecture has been thought through again.</li>
+  </ul>
+
+  <h2>What Tourbillon is not</h2>
+  <ul>
+    <li><strong>Not a database.</strong> Tourbillon never reads what is in an entry, and cannot be searched. Finding things is the job of the user's state.</li>
+    <li><strong>Not a product you install.</strong> It is a library. The user builds it in, and the application that hosts the user decides where it runs.</li>
+    <li><strong>Not a network server.</strong> Tourbillon does not open a network port. The traffic between its machines runs through endpoints that the host puts in its own web application, and the host protects that traffic.</li>
+    <li><strong>Not a judge of what may go.</strong> Tourbillon has no retention rules of its own: the user decides up to where the start of the log may be removed.</li>
+    <li><strong>Not a protection against a machine of its own that lies.</strong> Tourbillon trusts every copy of a group: a machine that takes part and does not follow the rules can break every promise in this book. The host makes sure that only its own machines can take part (chapter 6).</li>
+  </ul>
+
+  <h2>The name</h2>
+  <p>A tourbillon is a small turning cage in a mechanical watch. It carries the part that sets the pace, and by turning it all the time, it evens out the small errors that would otherwise make the watch run fast or slow. Tourbillon does the same for its users: machines fail and networks break, but the user keeps one steady log. Remontoire, too, is named after a part of a watch.</p>
+
+  <h2>Words used in this book</h2>
+  <dl class="glossary">
+    <dt>User</dt>
+    <dd>The program that uses Tourbillon, such as MSSP or Remontoire.</dd>
+    <dt>Entry</dt>
+    <dd>One piece of bytes the user hands to Tourbillon. Tourbillon never reads what is in it.</dd>
+    <dt>Log</dt>
+    <dd>The entries, one after the other, in the order Tourbillon accepted them.</dd>
+    <dt>Index</dt>
+    <dd>The number of an entry in its log: 1, 2, 3 and so on.</dd>
+    <dt>Propose</dt>
+    <dd>Hand an entry to Tourbillon, asking it to add the entry to the log.</dd>
+    <dt>Accepted</dt>
+    <dd>Safe: an accepted entry survives a crash, a power failure and the failure of fewer than half of the machines.</dd>
+    <dt>State</dt>
+    <dd>What the user builds from the accepted entries, such as the events of a stream or how far a reader got.</dd>
+  </dl>
+  <p>The next chapters define more words, as they are needed.</p></article>
+<nav class="pages">
+  <a href="index.html"><span>← Contents</span></a>
+  <a href="02-the-log-on-one-machine.html"><span>Chapter 2 →</span></a>
+</nav>
+</main>
+</body>
+</html>

@@ -12,6 +12,11 @@ and the application that hosts that program decides where it runs.
 
 This is a preview: the package is `0.1.0-preview.1` and the API is not stable yet.
 
+## Design
+
+How Tourbillon works and why, in plain language: the
+[architecture book](https://fleafx.github.io/Tourbillon/architecture/).
+
 ## License
 
 MIT, Copyright (c) 2026 Wouter Naessens. See [LICENSE](LICENSE).

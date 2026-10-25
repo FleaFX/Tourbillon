@@ -1,0 +1,132 @@
+:root {
+  --text: #1f2328;
+  --muted: #59636e;
+  --bg: #ffffff;
+  --surface: #f6f8fa;
+  --border: #d1d9e0;
+  --accent: #2f5d8a;
+  --accent-soft: #e8f0f8;
+  --warn-soft: #fff5d6;
+  --warn-border: #e3c766;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 17px/1.65 Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+}
+
+main {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 3rem 1rem 5rem;
+}
+
+h1, h2, h3, .kicker, .summary, .sample, figcaption, dt, nav {
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+.kicker {
+  margin: 0;
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+h1 { margin: 0.2rem 0 1.5rem; font-size: 2.1rem; line-height: 1.2; }
+h2 { margin: 2.5rem 0 0.75rem; font-size: 1.35rem; }
+
+.sample {
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--warn-border);
+  border-radius: 6px;
+  background: var(--warn-soft);
+  font-size: 0.85rem;
+}
+
+.summary {
+  margin: 1.5rem 0 2rem;
+  padding: 1rem 1.25rem;
+  border-left: 4px solid var(--accent);
+  background: var(--accent-soft);
+  font-size: 1rem;
+}
+
+.summary strong { display: block; margin-bottom: 0.3rem; }
+.summary p { margin: 0; }
+
+.promises {
+  margin: 2rem 0;
+  padding: 1rem 1.25rem;
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 1rem;
+}
+.promises strong { display: block; margin-bottom: 0.4rem; color: var(--accent); }
+.promises ul { margin: 0; padding-left: 1.2rem; }
+.promises li { margin-bottom: 0.3rem; }
+
+nav.pages {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font: 0.9rem "Segoe UI", system-ui, sans-serif;
+}
+nav.pages a { color: var(--accent); text-decoration: none; }
+nav.pages a:hover { text-decoration: underline; }
+
+ol.contents { padding-left: 1.4rem; font-family: "Segoe UI", system-ui, sans-serif; }
+ol.contents li { margin-bottom: 0.5rem; }
+ol.contents a { color: var(--accent); font-weight: 600; text-decoration: none; }
+ol.contents span { display: block; color: var(--muted); font-size: 0.9rem; }
+
+table { width: 100%; margin: 1.25rem 0; border-collapse: collapse; font-size: 0.95rem; }
+th, td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { font-family: "Segoe UI", system-ui, sans-serif; font-size: 0.85rem; color: var(--muted); }
+
+figure { margin: 2rem 0; }
+figure svg { display: block; width: 100%; height: auto; }
+
+figcaption {
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+ol.steps { padding-left: 1.4rem; }
+ol.steps li { margin-bottom: 0.4rem; }
+
+dl.glossary { margin: 1rem 0; }
+dl.glossary dt { margin-top: 0.9rem; font-weight: 600; }
+dl.glossary dd { margin: 0.1rem 0 0 0; }
+
+/* Diagram parts */
+.box { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+.box-main { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+.label { font: 600 15px "Segoe UI", system-ui, sans-serif; fill: var(--text); }
+.note { font: 13px "Segoe UI", system-ui, sans-serif; fill: var(--muted); }
+.step { font: 600 13px "Segoe UI", system-ui, sans-serif; fill: var(--accent); }
+.arrow { stroke: var(--accent); stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+.arrowhead { fill: var(--accent); }
+
+/* The book: one chapter per page run */
+@page { size: A4; margin: 22mm 20mm; }
+
+@media print {
+  body { font-size: 11.5pt; }
+  nav.pages { display: none; }
+  main { max-width: none; padding: 0; }
+  article + article { break-before: page; }
+  h2, figure, .summary { break-inside: avoid; }
+  h2 { break-after: avoid; }
+}
