@@ -5,7 +5,7 @@ namespace Tourbillon;
 /// in it.
 /// </summary>
 [Flags]
-internal enum EntryFlags : byte {
+enum EntryFlags : byte {
     /// <summary>
     /// No flags.
     /// </summary>

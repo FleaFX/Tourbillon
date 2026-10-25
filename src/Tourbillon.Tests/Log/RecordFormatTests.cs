@@ -224,7 +224,7 @@ public class RecordFormatTests {
 
         [Theory]
         [InlineData(2)]
-        [InlineData(0x80)]
+        [InlineData(0x40)]
         public void Unknown_flag_is_damage(byte flags) {
             var record = WriteValidRecord();
             record[10] = flags;
@@ -249,6 +249,130 @@ public class RecordFormatTests {
             RecomputeCrc(record);
 
             RecordFormat.TryRead(record, out _, out _).Should().Be(RecordStatus.Damaged);
+        }
+    }
+
+    public class FirstOfWrite {
+        [Fact]
+        public void Round_trip_with_the_bit_set() {
+            var entry = MakeEntry(EntryKind.Command, EntryFlags.MayUseReserve, 100, 5, 3);
+            var record = new byte[RecordFormat.GetLength(100)];
+
+            var written = RecordFormat.Write(in entry, record, firstOfWrite: true);
+
+            written.Should().Be(record.Length);
+            record[10].Should().Be((byte)0x81);
+            RecordFormat.TryRead(record, out var header, out var length).Should().Be(RecordStatus.Complete);
+            length.Should().Be(record.Length);
+            header.IsFirstOfWrite.Should().BeTrue();
+            header.Flags.Should().Be(EntryFlags.MayUseReserve);
+            header.Index.Should().Be(5);
+            header.Term.Should().Be(3);
+            header.Kind.Should().Be(EntryKind.Command);
+            header.PayloadLength.Should().Be(100);
+            record.AsSpan(RecordFormat.HeaderLength, 100).SequenceEqual(entry.Payload.Span).Should().BeTrue();
+        }
+
+        [Fact]
+        public void Round_trip_without_the_bit() {
+            var entry = MakeEntry(EntryKind.NoOp, EntryFlags.None, 0, 1, 1);
+            var record = new byte[RecordFormat.GetLength(0)];
+
+            var written = RecordFormat.Write(in entry, record, firstOfWrite: false);
+
+            written.Should().Be(record.Length);
+            record[10].Should().Be((byte)0x00);
+            RecordFormat.TryRead(record, out var header, out _).Should().Be(RecordStatus.Complete);
+            header.IsFirstOfWrite.Should().BeFalse();
+            header.Flags.Should().Be(EntryFlags.None);
+        }
+
+        [Fact]
+        public void Without_the_argument_the_record_is_not_marked() {
+            var entry = MakeEntry(EntryKind.Config, EntryFlags.MayUseReserve, 10, 2, 2);
+            var record = new byte[RecordFormat.GetLength(10)];
+
+            RecordFormat.Write(in entry, record);
+
+            record[10].Should().Be((byte)0x01);
+            RecordFormat.TryRead(record, out var header, out _).Should().Be(RecordStatus.Complete);
+            header.IsFirstOfWrite.Should().BeFalse();
+            header.Flags.Should().Be(EntryFlags.MayUseReserve);
+        }
+
+        [Fact]
+        public void TryRead_accepts_the_bit_and_masks_it_off() {
+            var record = WriteValidRecord();
+            record[10] |= 0x80;
+            RecomputeCrc(record);
+
+            RecordFormat.TryRead(record, out var header, out _).Should().Be(RecordStatus.Complete);
+
+            header.IsFirstOfWrite.Should().BeTrue();
+            header.Flags.Should().Be(EntryFlags.None);
+        }
+    }
+
+    public class TryReadDeclaredLength {
+        [Fact]
+        public void Reads_the_length_of_the_whole_record() {
+            var record = WriteValidRecord();
+
+            RecordFormat.TryReadDeclaredLength(record.AsSpan(0, 4), out var length).Should().BeTrue();
+
+            length.Should().Be(record.Length);
+        }
+
+        [Fact]
+        public void Needs_the_whole_length_field() =>
+            RecordFormat.TryReadDeclaredLength(new byte[3], out _).Should().BeFalse();
+    }
+
+    public class MayBeFirstOfWrite {
+        static byte[] WriteFirstOfWrite(EntryFlags flags = EntryFlags.None) {
+            var entry = MakeEntry(EntryKind.Command, flags, 10, 1, 1);
+            var record = new byte[RecordFormat.GetLength(10)];
+            RecordFormat.Write(in entry, record, firstOfWrite: true);
+            return record;
+        }
+
+        [Theory]
+        [InlineData((int)EntryFlags.None)]
+        [InlineData((int)EntryFlags.MayUseReserve)]
+        public void Passes_a_record_marked_first_of_a_write(int flags) {
+            var record = WriteFirstOfWrite((EntryFlags)flags);
+
+            RecordFormat.MayBeFirstOfWrite(record, record.Length).Should().BeTrue();
+        }
+
+        [Fact]
+        public void Rejects_a_record_without_the_mark() =>
+            RecordFormat.MayBeFirstOfWrite(WriteValidRecord(), RecordFormat.GetLength(10)).Should().BeFalse();
+
+        [Fact]
+        public void Rejects_a_record_longer_than_the_bytes_left() {
+            var record = WriteFirstOfWrite();
+
+            RecordFormat.MayBeFirstOfWrite(record, record.Length - 1).Should().BeFalse();
+        }
+
+        [Theory]
+        [InlineData(8, 2)] // version
+        [InlineData(9, 0)] // kind
+        [InlineData(10, 0xC0)] // unknown flag bit next to the mark
+        [InlineData(0, 0)] // length below the fixed fields
+        public void Rejects_a_bad_fixed_byte(int offset, byte value) {
+            var record = WriteFirstOfWrite();
+            record[offset] = value;
+
+            RecordFormat.MayBeFirstOfWrite(record, record.Length).Should().BeFalse();
+        }
+
+        [Fact]
+        public void Refuses_less_than_a_header() {
+            var check = () => RecordFormat.MayBeFirstOfWrite(new byte[RecordFormat.HeaderLength - 1], 100);
+
+            check.Should().Throw<ArgumentException>();
         }
     }
 }

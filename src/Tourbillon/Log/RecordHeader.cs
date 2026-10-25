@@ -4,7 +4,7 @@ namespace Tourbillon.Log;
 /// The fields of a decoded record; its payload is the <see cref="PayloadLength"/> bytes
 /// at <see cref="RecordFormat.HeaderLength"/> from the start of the record.
 /// </summary>
-internal readonly struct RecordHeader(ulong index, ulong term, EntryKind kind, EntryFlags flags, int payloadLength) {
+readonly struct RecordHeader(ulong index, ulong term, EntryKind kind, EntryFlags flags, bool isFirstOfWrite, int payloadLength) {
     /// <summary>
     /// The index of the entry in the record.
     /// </summary>
@@ -24,6 +24,12 @@ internal readonly struct RecordHeader(ulong index, ulong term, EntryKind kind, E
     /// The flags of the entry in the record.
     /// </summary>
     public EntryFlags Flags { get; } = flags;
+
+    /// <summary>
+    /// Whether the record is marked as the first record of a write. The mark
+    /// belongs to the record, not to the entry.
+    /// </summary>
+    public bool IsFirstOfWrite { get; } = isFirstOfWrite;
 
     /// <summary>
     /// The number of payload bytes after the header.
