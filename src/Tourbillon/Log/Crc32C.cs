@@ -11,7 +11,7 @@ namespace Tourbillon.Log;
 /// and x86 SSE4.2 CRC32 instructions, which compute Castagnoli natively, with a
 /// table-driven software fallback for platforms without them.
 /// </summary>
-internal static class Crc32C {
+static class Crc32C {
     const uint InitialValue = 0xFFFFFFFF;
     static readonly uint[] SoftwareTable = BuildTable();
 
@@ -36,7 +36,7 @@ internal static class Crc32C {
     /// can exercise this path directly, regardless of which path
     /// <see cref="ComputeHash"/> would pick on the machine actually running the tests.
     /// </summary>
-    internal static uint ComputeHardwareArm64(ReadOnlySpan<byte> data) {
+    public static uint ComputeHardwareArm64(ReadOnlySpan<byte> data) {
         var crc = InitialValue;
         var i = 0;
 
@@ -59,7 +59,7 @@ internal static class Crc32C {
     /// internally so tests can exercise this path directly, regardless of which path
     /// <see cref="ComputeHash"/> would pick on the machine actually running the tests.
     /// </summary>
-    internal static uint ComputeHardwareX64(ReadOnlySpan<byte> data) {
+    public static uint ComputeHardwareX64(ReadOnlySpan<byte> data) {
         var crc = (ulong)InitialValue;
         var i = 0;
 
@@ -82,7 +82,7 @@ internal static class Crc32C {
     /// internally so tests can exercise this path directly, regardless of which path
     /// <see cref="ComputeHash"/> would pick on the machine actually running the tests.
     /// </summary>
-    internal static uint ComputeHardware32(ReadOnlySpan<byte> data) {
+    public static uint ComputeHardware32(ReadOnlySpan<byte> data) {
         var crc = InitialValue;
         var i = 0;
 
@@ -105,7 +105,7 @@ internal static class Crc32C {
     /// internally so tests can exercise this path directly, regardless of which path
     /// <see cref="ComputeHash"/> would pick on the machine actually running the tests.
     /// </summary>
-    internal static uint ComputeSoftware(ReadOnlySpan<byte> data) {
+    public static uint ComputeSoftware(ReadOnlySpan<byte> data) {
         var crc = InitialValue;
 
         foreach (var b in data)

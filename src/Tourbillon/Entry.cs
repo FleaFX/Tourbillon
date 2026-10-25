@@ -4,7 +4,7 @@ namespace Tourbillon;
 /// One entry of a log: its place, the term it was proposed in, its kind and flags, and
 /// the user's opaque payload.
 /// </summary>
-internal readonly struct Entry(ulong index, ulong term, EntryKind kind, EntryFlags flags, ReadOnlyMemory<byte> payload) {
+readonly struct Entry(ulong index, ulong term, EntryKind kind, EntryFlags flags, ReadOnlyMemory<byte> payload) {
     /// <summary>
     /// The place of the entry in its log, starting at 1.
     /// </summary>

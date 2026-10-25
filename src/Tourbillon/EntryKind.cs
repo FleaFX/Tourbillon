@@ -3,7 +3,7 @@ namespace Tourbillon;
 /// <summary>
 /// What an entry is for. Everything the user proposes is a <see cref="Command"/>.
 /// </summary>
-internal enum EntryKind : byte {
+enum EntryKind : byte {
     /// <summary>
     /// An entry the user proposed, with an opaque payload.
     /// </summary>

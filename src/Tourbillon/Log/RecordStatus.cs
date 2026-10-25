@@ -3,7 +3,7 @@ namespace Tourbillon.Log;
 /// <summary>
 /// What the decoder found at the start of the input.
 /// </summary>
-internal enum RecordStatus {
+enum RecordStatus {
     /// <summary>
     /// A whole record with a correct check number.
     /// </summary>
