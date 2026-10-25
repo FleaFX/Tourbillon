@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The log on one machine</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<article>
+  <p class="kicker">Chapter 2</p>
+  <h1>The log on one machine</h1>
+
+
+  <div class="summary">
+    <strong>In three sentences</strong>
+    <p>On one machine, a log is a row of files on disk called segments: new entries go at the end of the last one, and the start of the log is only ever removed a whole segment at a time. An entry counts as accepted only once the disk has really stored it, and entries that arrive together share one such write. After a crash, Tourbillon checks the end of the log, cuts off an entry that was only half written, and goes on with exactly the entries it had accepted.</p>
+  </div>
+
+  <h2>One machine is a real way to run</h2>
+  <p>A user can run Tourbillon on one machine in production, also inside its own process. That is not a test mode: everything this chapter promises holds on one machine. Chapter 4 adds machines, so that one can fail without anything stopping, but it does not change what is described here: every copy keeps its log exactly as this chapter says.</p>
+
+  <h2>A log is a row of segments</h2>
+  <p>Every log has its own folder on disk. In it, the log is cut into segments: files that each hold the entries of one stretch of indexes. New entries are written at the end of the last segment; when it has reached a set size, a new segment starts. The size is a setting of the log.</p>
+  <p>Segments make removing cheap. When the user no longer needs the start of the log (chapter 3 says how it decides that), Tourbillon removes the segments that lie completely before that point, by deleting their files. It never removes part of a segment: a segment that still holds one entry the user needs, stays whole.</p>
+
+  <figure>
+    <svg viewBox="0 0 680 210" role="img" aria-labelledby="fig2-title">
+      <title id="fig2-title">A log of three segments: indexes 1 to 1000, already removed; indexes 1001 to 2000, full; and indexes from 2001, where new entries are added. The user allows removal up to index 1500, which lies inside the second segment, so that segment stays.</title>
+      <defs>
+        <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+      </defs>
+
+      <text class="label" x="1" y="22">One log</text>
+
+      <rect class="box" x="1" y="40" width="210" height="80" rx="6" stroke-dasharray="6 4" opacity="0.6"/>
+      <text class="label" x="106" y="72" text-anchor="middle">indexes 1–1000</text>
+      <text class="note" x="106" y="95" text-anchor="middle">removed</text>
+
+      <rect class="box" x="235" y="40" width="210" height="80" rx="6"/>
+      <text class="label" x="340" y="72" text-anchor="middle">indexes 1001–2000</text>
+      <text class="note" x="340" y="95" text-anchor="middle">full</text>
+
+      <rect class="box-main" x="469" y="40" width="210" height="80" rx="6"/>
+      <text class="label" x="574" y="72" text-anchor="middle">indexes 2001 →</text>
+      <text class="note" x="574" y="95" text-anchor="middle">new entries here</text>
+
+      <path class="arrow" d="M340,175 L340,124"/>
+      <text class="step" x="340" y="195" text-anchor="middle">the user may let go up to index 1500</text>
+    </svg>
+    <figcaption>Figure 2. One log on disk. The user may let go of everything up to index 1500, but that lies inside the second segment, so only the first segment is removed.</figcaption>
+  </figure>
+
+  <p>So an entry can stay a little longer than the user needs it, never shorter. Keeping it too long costs some disk space; removing it too early would lose something that was promised. A smaller segment size keeps entries less long past that point, at the cost of more files.</p>
+
+  <h2>When an entry counts as accepted</h2>
+  <p>A computer does not write to disk straight away: it first keeps new data in memory, and writes it later. If the power fails in between, that data is gone. So Tourbillon asks the disk to really store the entry, and waits until it has, before it answers "accepted".</p>
+  <p>Waiting for the disk is slow compared to everything else. So Tourbillon does not write entries one by one: everything that was proposed while the disk was busy goes into the next write, together. One wait for the disk answers many proposals. When it is quiet, an entry is written on its own straight away; when it is busy, many share one write. There is no timer to tune.</p>
+  <p>A write can fail, for example because the disk reports an error. Then every entry of that write gets an error, and Tourbillon removes whatever part of that write already reached the file, so that a later write cannot make it count after all. If even that fails, the log stops taking entries and reports that it is broken, rather than risk a log it can no longer trust.</p>
+
+  <h2>After a crash</h2>
+  <p>Every entry on disk has a check number, computed from its content, and its index. When Tourbillon starts again, it reads the end of every log and checks it. An entry that was only half written when the machine stopped has a wrong check number, or simply stops too early: Tourbillon cuts it off, with everything after it. That entry was never accepted, because the disk had not finished storing it, so the user never got "accepted" for it.</p>
+  <p>The entries of one write may reach the disk in any order, so after a crash a whole entry can stand behind a half-written one; both belong to the write that never finished, and both go. To tell such an end from damage, the first entry of every write is marked, and a write only starts once the one before it is on disk. So when Tourbillon finds a bad entry with the start of a later write behind it, the bad entry was already on disk: that is damage. An example:</p>
+  <ol class="steps">
+    <li>Entries 1 to 10 are written together, then entries 11 to 20. The machine stops while it writes entries 21 to 30.</li>
+    <li>After the restart, entry 25 has a wrong check number, and no write starts after it. Entry 25 belongs to the last write, which never finished: Tourbillon cuts off entries 25 to 30.</li>
+    <li>Had entry 15 been the bad one, Tourbillon would find the start of the write of entry 21 behind it. Then entries 11 to 20 were already on disk, so entry 15 is damage, and the log is refused.</li>
+  </ol>
+  <p>One case cannot be told apart: damage in the write just before the last one, when the first entry of the last write is itself half written. In the example: entry 15 is damaged and entry 21 is half written. Nothing marks a later write any more, so Tourbillon cuts off from entry 15, as if it were a half-written end.</p>
+  <p>A wrong check number in a segment before the last one is always damage: that segment was already complete, and has changed. Tourbillon then refuses to open that log, with a clear error, instead of skipping the damaged entries. Skipping would leave a hole in the indexes, and hand the user a log that is not the one it was promised. On one machine, the user then has to restore the log; with several machines, a copy can be made again from the others (chapter 5).</p>
+  <p>Next to the log, Tourbillon keeps a few small facts, such as up to where the start of the log was removed (chapter 3) and what the machines agreed on (chapter 4). Each of them is written to a new file first, stored on disk, and only then put in the place of the old one. So after a crash, each is either the old version or the new one, never half of each.</p>
+
+  <h2>When the disk is full</h2>
+  <p>Storage is full when the disk is full, or earlier, when the logs reach a maximum size that was set for them. That maximum is optional; without it, the disk is the limit.</p>
+  <p>When storage is full, Tourbillon refuses new entries with a clear error, and nothing that was accepted is touched. Removing segments goes on, so the space comes back once the user lets go of the start of a log.</p>
+  <p>But a user sometimes needs to write in order to free space. In Remontoire, for example, a message may only go once every reader has acknowledged it, and an acknowledgement is itself an entry. So Tourbillon keeps some space in reserve, and when the user proposes an entry, it says whether that entry may use the reserve. Remontoire allows it for acknowledgements, which help free space, and not for new messages. Once the reserve is used up too, every entry is refused.</p>
+  <p>Tourbillon never makes room by removing entries the user still needs.</p>
+
+  <div class="promises">
+    <strong>What must always be true</strong>
+    <ul>
+      <li>An entry Tourbillon called accepted is on disk: a crash or a power failure right after does not lose it.</li>
+      <li>An entry is in the log completely, or not at all.</li>
+      <li>The indexes of a log have no holes: from the first entry still kept to the last, every number is there.</li>
+      <li>A failed write leaves nothing behind that could later count as accepted.</li>
+      <li>Tourbillon only removes whole segments, and only segments that lie completely before the point the user let go of.</li>
+      <li>When storage is full, only new entries are refused; nothing accepted is removed to make room.</li>
+    </ul>
+  </div>
+
+  <h2>What Tourbillon does not do here</h2>
+  <ul>
+    <li>Tourbillon does not answer "accepted" while an entry is only in memory, not even as a faster option.</li>
+    <li>Tourbillon does not skip damaged entries to keep going.</li>
+    <li>On one machine, Tourbillon does not protect against losing the disk itself. That is what more machines are for (chapter 4).</li>
+    <li>Tourbillon does not compress or encrypt entries. A user that wants its entries smaller or secret does that before proposing them; encrypting the whole disk is up to the host.</li>
+  </ul>
+
+  <h2>Words used in this chapter</h2>
+  <dl class="glossary">
+    <dt>Segment</dt>
+    <dd>One file of a log, holding the entries of one stretch of indexes. The start of a log is removed a whole segment at a time.</dd>
+    <dt>Write to disk</dt>
+    <dd>Make the disk really store data, instead of keeping it in memory for later.</dd>
+    <dt>Check number</dt>
+    <dd>A number computed from an entry's content, to see after a crash whether it was written completely, and to notice damage.</dd>
+    <dt>Reserve</dt>
+    <dd>Space kept free for the entries a user marks as helping to free space, so it can still write them when storage is full.</dd>
+  </dl></article>
+<nav class="pages">
+  <a href="01-what-is-tourbillon.html"><span>← Chapter 1</span></a>
+  <a href="index.html"><span>Contents</span></a>
+  <a href="03-the-users-state.html"><span>Chapter 3 →</span></a>
+</nav>
+</main>
+</body>
+</html>

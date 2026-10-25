@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Several machines</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<article>
+  <p class="kicker">Chapter 4</p>
+  <h1>Several machines</h1>
+
+
+  <div class="summary">
+    <strong>In three sentences</strong>
+    <p>With several machines, a log has a copy on each of a few of them, and together those copies form a group. One copy is the leader: it takes every new entry, hands it to the others, and calls it accepted once most copies have it on disk. If the leader fails, the others choose a new one that has every accepted entry, so one machine can fail without anything being lost.</p>
+  </div>
+
+  <h2>Groups and copies</h2>
+  <p>A group is one log, kept on several machines at once. Each machine keeps its own copy of the log, exactly as chapter 2 describes, and each has its own user that applies the entries to its own state (chapter 3). How many copies a group has is chosen by the user: 3 is usual, 5 for something that must survive two failures, 1 for one machine.</p>
+  <p>A machine can carry copies of many groups. Remontoire has a group for every partition of every stream, and one for its register; MSSP has one group.</p>
+
+  <h2>The leader and the majority</h2>
+  <p>One copy of a group is the leader; the others are followers. A new entry is always proposed to the leader. The leader writes it to its own disk, hands it to the followers, and each follower writes it to its own disk and answers. Once a majority of the copies has the entry on disk, the leader calls it accepted: 2 of 3, or 3 of 5. The leader counts itself too, but only once its own disk has stored the entry.</p>
+
+  <figure>
+    <svg viewBox="0 0 680 250" role="img" aria-labelledby="fig4-title">
+      <title id="fig4-title">The user proposes an entry to the leader on machine 1. The leader hands it to the followers on machines 2 and 3. The entry is accepted once 2 of the 3 copies have it on disk.</title>
+      <defs>
+        <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+      </defs>
+
+      <rect class="box" x="1" y="90" width="150" height="70" rx="8"/>
+      <text class="label" x="76" y="122" text-anchor="middle">The user</text>
+      <text class="note" x="76" y="143" text-anchor="middle">on any machine</text>
+
+      <rect class="box-main" x="246" y="90" width="170" height="70" rx="8"/>
+      <text class="label" x="331" y="122" text-anchor="middle">Machine 1</text>
+      <text class="note" x="331" y="143" text-anchor="middle">leader</text>
+
+      <rect class="box" x="509" y="20" width="170" height="70" rx="8"/>
+      <text class="label" x="594" y="52" text-anchor="middle">Machine 2</text>
+      <text class="note" x="594" y="73" text-anchor="middle">follower</text>
+
+      <rect class="box" x="509" y="160" width="170" height="70" rx="8"/>
+      <text class="label" x="594" y="192" text-anchor="middle">Machine 3</text>
+      <text class="note" x="594" y="213" text-anchor="middle">follower</text>
+
+      <path class="arrow" d="M153,110 L242,110"/>
+      <text class="step" x="197" y="99" text-anchor="middle">1 propose</text>
+
+      <path class="arrow" d="M418,110 L505,62"/>
+      <path class="arrow" d="M418,140 L505,188"/>
+      <text class="step" x="462" y="128" text-anchor="middle">2 copy</text>
+
+      <path class="arrow" d="M242,145 L155,145"/>
+      <text class="step" x="197" y="168" text-anchor="middle">3 accepted</text>
+      <text class="note" x="197" y="186" text-anchor="middle">once 2 of 3 have it</text>
+    </svg>
+    <figcaption>Figure 4. One group with three copies. Only the leader takes new entries; a majority on disk makes them accepted.</figcaption>
+  </figure>
+
+  <p>Because only the leader adds entries, they are in the same order in every copy. A follower that gets a proposal does not add it: it answers with an error that names the leader, and the user proposes again there. The leader shares writes the same way chapter 2 describes: everything proposed while the disks were busy goes out together.</p>
+  <p>The followers also learn from the leader which entries are accepted, and hand those to their own user. So the users on all machines apply the same entries in the same order, a moment after each other.</p>
+
+  <h2>Choosing a leader</h2>
+  <p>The leader sends the followers a short sign of life several times per second, also when there is nothing new. A follower that hears nothing for a while assumes the leader is gone, and asks the others to make it the new leader.</p>
+  <p>Elections are numbered: every new election gets a number one higher than the last one, called the term. A copy votes at most once per term, and only for a copy whose log is at least as complete as its own. A copy that gets the votes of a majority, its own included, is the leader for that term. Every copy stores the highest term it has seen and its vote on disk before it answers, so that a crash cannot make it vote twice.</p>
+  <p>That rule is why a new leader always has every accepted entry. An example with three machines:</p>
+  <ol class="steps">
+    <li>Machine 1 leads in term 4. Entry 800 is on the disks of machines 1 and 2: that is 2 of 3, so it is accepted. Machine 3 has only up to entry 799.</li>
+    <li>Machine 1 fails. Machine 3 is the first to notice, and asks machine 2 for its vote in term 5.</li>
+    <li>Machine 2 refuses: its own log has entry 800, the log of machine 3 does not. Machine 3 has only its own vote, 1 of 3, and does not become leader.</li>
+    <li>A moment later, machine 2 asks for votes in term 6. Machine 3 agrees, since the log of machine 2 is at least as complete as its own. Machine 2 has 2 of 3 votes and leads, with entry 800.</li>
+  </ol>
+  <p>This always works, because an accepted entry is on a majority, and every majority of voters shares at least one copy with it: that copy refuses any candidate that misses the entry. A group of three needs a short pause to choose a new leader, usually well under a second; then it goes on.</p>
+  <p>A new leader first adds one empty entry of its own term, and waits until it is accepted, before it takes proposals. That settles everything it inherited from earlier leaders: once the empty entry is accepted, every entry before it is too.</p>
+
+  <h2>Entries that were never accepted</h2>
+  <p>A leader can fail in the middle of its work, when an entry is already on its own disk but not yet on a majority. Then that entry was never accepted, and it can disappear. An example:</p>
+  <ol class="steps">
+    <li>Machine 1 leads and writes entry 801 to its disk. Before it can hand it on, it is cut off from the network.</li>
+    <li>Machines 2 and 3 choose machine 2 as leader. Machine 2 takes a new proposal, and that one becomes entry 801 in the logs of machines 2 and 3: accepted.</li>
+    <li>Machine 1 comes back. The leader sees that its entry 801 differs, and replaces it with the accepted entry 801.</li>
+  </ol>
+  <p>Nothing that was accepted is lost by this: the replaced entry never reached a majority, so no user ever got "accepted" for it, and no user applied it. Accepted entries are never replaced.</p>
+
+  <h2>When the answer does not come</h2>
+  <p>In the example above, the user that proposed the first entry 801 never got an answer. It waited, and after a while it gave up: a timeout. Its entry was not accepted. But a timeout can also hide the opposite. The same example, a little different:</p>
+  <ol class="steps">
+    <li>Machine 1 leads, writes entry 801 to its disk, and hands it to machine 2, which stores it. Then machine 1 is cut off, before it hears back from machine 2.</li>
+    <li>The user that proposed entry 801 gets no answer: a timeout.</li>
+    <li>Machines 2 and 3 choose machine 2 as leader. Its log has entry 801, so that entry stays, and becomes accepted after all.</li>
+  </ol>
+  <p>For the user, both cases look the same: it got no answer. In the first case its entry is gone, in the second it is accepted, and the user cannot tell which. That is why a proposal can end in three ways, not two:</p>
+  <ul>
+    <li><strong>Accepted.</strong> The entry is safe, with its index.</li>
+    <li><strong>Refused.</strong> The entry is certainly not in the log, and never will be. Tourbillon only says this when it is sure: for example, the copy was not the leader when the entry arrived, or storage was full.</li>
+    <li><strong>Unknown.</strong> Tourbillon cannot say. That is the case when the answer does not come in time, when the connection to the leader breaks, or when the leader stops leading while the entry is under way.</li>
+  </ul>
+  <p>After "unknown", the user simply proposes the same entry again. If the first one was accepted after all, the entry is now in the log twice, so the user must recognise the second one as a duplicate when it applies it and skip it. Remontoire and MSSP both do that, by the id of the message or event in the entry.</p>
+
+  <h2>A copy that is behind</h2>
+  <p>A follower that was down for a while, or is slower, misses entries. The leader keeps track of how far every follower is, and sends it what it misses, oldest first. If the user on the leader has already let go of those entries (chapter 3), the leader sends the snapshot of its user instead, and then the entries after it.</p>
+
+  <h2>When a copy is full</h2>
+  <p>Every machine has its own disk, so one copy can be full while the others still have room. A full follower follows the rules of chapter 2 too: it does not store what the leader sends, answers "full", and the leader counts it as a copy that does not have the entry. Whether an entry may use the reserve is stored in the entry itself, so every copy decides the same way. An example with three machines:</p>
+  <ol class="steps">
+    <li>The disk of machine 3 is full. Machines 1 (the leader) and 2 still have room. A new entry is on 2 of 3 disks: accepted. The group goes on, as if machine 3 were down.</li>
+    <li>Now machine 2 is full too. Only the leader has room, 1 of 3: no new entry can reach a majority.</li>
+    <li>The leader knows that from the answers "full", and refuses new entries straight away with "storage full", before it writes them. That refusal is certain: the entry is in no log. Entries that may use the reserve still go through, as long as a majority has reserve left.</li>
+  </ol>
+
+  <h2>When no majority is left</h2>
+  <p>If too many copies are down or cut off, for example 2 of 3, no majority can store an entry and no copy can win an election. The group then accepts nothing, and every proposal is refused with an error. Nothing accepted is lost; once enough copies are back, the group chooses a leader and goes on.</p>
+  <p>When the network splits a group in two, only the side with a majority can go on. A leader on the other side can no longer get anything accepted: it notices that it no longer hears from a majority, stops leading, and refuses proposals. So there may briefly be a copy that still thinks it leads, but only one leader can ever get entries accepted.</p>
+
+  <div class="promises">
+    <strong>What must always be true</strong>
+    <ul>
+      <li>An accepted entry is on disk on a majority of the copies of its group.</li>
+      <li>A group has at most one leader per term, and only a leader adds entries.</li>
+      <li>A new leader has every accepted entry.</li>
+      <li>Accepted entries are never replaced; an entry that was never accepted may be.</li>
+      <li>Every copy hands its user the same accepted entries in the same order.</li>
+      <li>Without a majority, a group accepts nothing.</li>
+      <li>"Refused" means the entry is certainly not in the log; when Tourbillon cannot be sure, the answer is "unknown".</li>
+      <li>A copy stores its term and vote on disk before it answers, and never votes twice in one term.</li>
+    </ul>
+  </div>
+
+  <h2>What Tourbillon does not do here</h2>
+  <ul>
+    <li>Tourbillon does not accept an entry without a majority, not even to keep going when machines fail.</li>
+    <li>Tourbillon does not decide on which machines the copies of a group are, or which copy should lead. The user decides that; chapter 5 says how it changes them.</li>
+    <li>Tourbillon does not protect against losing a majority of the copies at once. More copies protect against more failures.</li>
+    <li>A follower does not forward a proposal to the leader by itself; it names the leader, and the user proposes there.</li>
+  </ul>
+
+  <h2>Words used in this chapter</h2>
+  <dl class="glossary">
+    <dt>Group</dt>
+    <dd>One log, kept as a copy on each of several machines.</dd>
+    <dt>Copy</dt>
+    <dd>The log of a group on one machine. Also called a replica.</dd>
+    <dt>Leader, follower</dt>
+    <dd>The copy that takes new entries and hands them on; the other copies, which store what the leader sends.</dd>
+    <dt>Majority</dt>
+    <dd>More than half of the copies of a group: 2 of 3, 3 of 5.</dd>
+    <dt>Term</dt>
+    <dd>The number of an election. Every new election has a higher term; a group has at most one leader per term.</dd>
+    <dt>Unknown</dt>
+    <dd>The outcome of a proposal when Tourbillon cannot say whether it was accepted, for example after a timeout. The user proposes it again and skips the duplicate.</dd>
+  </dl></article>
+<nav class="pages">
+  <a href="03-the-users-state.html"><span>← Chapter 3</span></a>
+  <a href="index.html"><span>Contents</span></a>
+  <a href="05-changing-the-copies.html"><span>Chapter 5 →</span></a>
+</nav>
+</main>
+</body>
+</html>

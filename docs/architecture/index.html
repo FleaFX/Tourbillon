@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tourbillon architecture</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<article>
+  <p class="kicker">Tourbillon</p>
+  <h1>Architecture</h1>
+
+  <div class="summary">
+    <strong>Read this first</strong>
+    <p>This book explains how Tourbillon works and why, in plain language. Read the chapters in order: each one builds on the words and ideas of the ones before. The book always describes the current design.</p>
+  </div>
+
+  <h2>Chapters</h2>
+  <ol class="contents">
+    <li><a href="01-what-is-tourbillon.html">What is Tourbillon</a><span>The problem it solves, what it does, and what it is not.</span></li>
+    <li><a href="02-the-log-on-one-machine.html">The log on one machine</a><span>Entries and segments, when an entry counts as accepted, what happens after a crash, and when the disk is full.</span></li>
+    <li><a href="03-the-users-state.html">The user's state</a><span>How the program that uses Tourbillon gets the accepted entries, snapshots, and who decides when entries may go.</span></li>
+    <li><a href="04-several-machines.html">Several machines</a><span>Groups, copies, the leader, the majority, and what happens when a machine fails.</span></li>
+    <li><a href="05-changing-the-copies.html">Changing the copies</a><span>Adding and removing a copy, letting a new copy catch up, and handing over leadership.</span></li>
+    <li><a href="06-hosting-and-api.html">Hosting and API</a><span>Many groups in one process, the network through the host, settings, measurements, and the test package.</span></li>
+  </ol>
+</article>
+<nav class="pages">
+  <span></span>
+  <a href="01-what-is-tourbillon.html"><span>Chapter 1 →</span></a>
+</nav>
+</main>
+</body>
+</html>
