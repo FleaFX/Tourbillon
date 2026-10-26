@@ -62,7 +62,7 @@ public class SegmentTests {
     }
 
     static async Task<byte[]> WriteWritesAsync(string path, params Entry[][] writes) {
-        using (var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken)) {
+        using (var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken)) {
             foreach (var write in writes)
                 await segment.AppendAsync(write);
         }
@@ -76,7 +76,7 @@ public class SegmentTests {
             using var directory = new TempDirectory();
             var path = directory.GetFilePath("segment.seg");
             using var stream = new GatedFlushFileStream(path);
-            using var segment = await Segment.OpenAsync(stream, 1, TestContext.Current.CancellationToken);
+            using var segment = await Segment.OpenAsync(stream, 1, false, TestContext.Current.CancellationToken);
 
             var append = Task.Run(async () => await segment.AppendAsync(MakeEntries(1, 3)), TestContext.Current.CancellationToken);
 
@@ -95,7 +95,7 @@ public class SegmentTests {
             using var directory = new TempDirectory();
             var path = directory.GetFilePath("segment.seg");
             var stream = new CountingFileStream(path);
-            using (var segment = await Segment.OpenAsync(stream, 1, TestContext.Current.CancellationToken))
+            using (var segment = await Segment.OpenAsync(stream, 1, false, TestContext.Current.CancellationToken))
                 await segment.AppendAsync(MakeEntries(1, 1000));
 
             stream.WriteCount.Should().Be(1);
@@ -115,7 +115,7 @@ public class SegmentTests {
             using var directory = new TempDirectory();
             var path = directory.GetFilePath("segment.seg");
             using var stream = new CountingFileStream(path);
-            using var segment = await Segment.OpenAsync(stream, 1, TestContext.Current.CancellationToken);
+            using var segment = await Segment.OpenAsync(stream, 1, false, TestContext.Current.CancellationToken);
 
             await segment.AppendAsync(Array.Empty<Entry>());
 
@@ -129,7 +129,7 @@ public class SegmentTests {
         public async Task Refuses_a_batch_that_does_not_follow_on() {
             using var directory = new TempDirectory();
             var path = directory.GetFilePath("segment.seg");
-            using var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+            using var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
 
             await segment.AppendAsync(MakeEntries(1, 2));
             await segment.AppendAsync(new[] { MakeEntry(3, term: 2) });
@@ -159,7 +159,7 @@ public class SegmentTests {
         public async Task Round_trip_of_every_kind_and_flag() {
             using var directory = new TempDirectory();
             var path = directory.GetFilePath("segment.seg");
-            using var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+            using var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
 
             var kinds = new[] { EntryKind.Command, EntryKind.NoOp, EntryKind.Config };
             var allFlags = new[] { EntryFlags.None, EntryFlags.MayUseReserve };
@@ -197,7 +197,7 @@ public class SegmentTests {
             var path = directory.GetFilePath("segment.seg");
 
             using (var stream = new FaultyFileStream(path))
-            using (var segment = await Segment.OpenAsync(stream, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(stream, 1, false, TestContext.Current.CancellationToken)) {
                 await segment.AppendAsync(MakeEntries(1, 3));
                 var lengthAfterGoodBatch = segment.Length;
 
@@ -221,7 +221,7 @@ public class SegmentTests {
                 records[i].Payload.Should().Equal(MakePayload((ulong)(i + 1), 16, seed: i < 3 ? 0 : 1));
             }
 
-            using (var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken)) {
                 segment.LastIndex.Should().Be(5);
                 for (var index = 1ul; index <= 5; index++) {
                     var buffer = new byte[segment.GetRecordLength(index)];
@@ -237,7 +237,7 @@ public class SegmentTests {
             var path = directory.GetFilePath("segment.seg");
 
             using (var stream = new FaultyFileStream(path))
-            using (var segment = await Segment.OpenAsync(stream, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(stream, 1, false, TestContext.Current.CancellationToken)) {
                 await segment.AppendAsync(MakeEntries(1, 3));
                 var lengthAfterGoodBatch = segment.Length;
 
@@ -259,7 +259,7 @@ public class SegmentTests {
                 records[i].Payload.Should().Equal(MakePayload((ulong)(i + 1), 16, seed: i < 3 ? 0 : 1));
             }
 
-            using (var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken)) {
                 segment.LastIndex.Should().Be(5);
                 for (var index = 1ul; index <= 5; index++) {
                     var buffer = new byte[segment.GetRecordLength(index)];
@@ -275,7 +275,7 @@ public class SegmentTests {
             var path = directory.GetFilePath("segment.seg");
 
             using (var stream = new FaultyFileStream(path))
-            using (var segment = await Segment.OpenAsync(stream, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(stream, 1, false, TestContext.Current.CancellationToken)) {
                 await segment.AppendAsync(MakeEntries(1, 3));
                 var recordLength = segment.GetRecordLength(1);
 
@@ -303,7 +303,7 @@ public class SegmentTests {
             var path = directory.GetFilePath("segment.seg");
 
             using (var stream = new FaultyFileStream(path))
-            using (var segment = await Segment.OpenAsync(stream, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(stream, 1, false, TestContext.Current.CancellationToken)) {
                 await segment.AppendAsync(MakeEntries(1, 3));
                 var recordLength = segment.GetRecordLength(1);
 
@@ -338,7 +338,7 @@ public class SegmentTests {
             for (var length = startOfThird; length < endOfThird; length++) {
                 await File.WriteAllBytesAsync(path, fileBytes.AsMemory(0, length), TestContext.Current.CancellationToken);
 
-                using var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+                using var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
                 segment.LastIndex.Should().Be(2);
                 segment.Length.Should().Be(startOfThird);
                 new FileInfo(path).Length.Should().Be(startOfThird);
@@ -365,7 +365,7 @@ public class SegmentTests {
                 flipped[startOfThird + offset] ^= 0xFF;
                 await File.WriteAllBytesAsync(path, flipped, TestContext.Current.CancellationToken);
 
-                using var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+                using var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
                 segment.LastIndex.Should().Be(2);
                 segment.Length.Should().Be(startOfThird);
                 new FileInfo(path).Length.Should().Be(startOfThird);
@@ -382,7 +382,7 @@ public class SegmentTests {
             Array.Copy(fileBytes, withZeros, fileBytes.Length);
             await File.WriteAllBytesAsync(path, withZeros, TestContext.Current.CancellationToken);
 
-            using var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+            using var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
             segment.LastIndex.Should().Be(2);
             segment.Length.Should().Be(fileBytes.Length);
             new FileInfo(path).Length.Should().Be(fileBytes.Length);
@@ -402,7 +402,7 @@ public class SegmentTests {
                 flipped[positions[3] + offset] ^= 0xFF;
                 await File.WriteAllBytesAsync(path, flipped, TestContext.Current.CancellationToken);
 
-                using var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+                using var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
                 segment.LastIndex.Should().Be(3);
                 segment.Length.Should().Be(positions[3]);
                 new FileInfo(path).Length.Should().Be(positions[3]);
@@ -430,7 +430,7 @@ public class SegmentTests {
                     flipped[positions[record] + offset] ^= 0xFF;
                     await File.WriteAllBytesAsync(path, flipped, TestContext.Current.CancellationToken);
 
-                    var open = async () => await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+                    var open = async () => await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
                     await open.Should().ThrowExactlyAsync<InvalidDataException>();
 
                     // Nothing is cut: the file is unchanged.
@@ -457,7 +457,7 @@ public class SegmentTests {
             damaged[positions[4]] = 0xFF;
             await File.WriteAllBytesAsync(path, damaged, TestContext.Current.CancellationToken);
 
-            var open = async () => await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+            var open = async () => await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
             await open.Should().ThrowExactlyAsync<InvalidDataException>();
 
             // Nothing is cut: the file is unchanged.
@@ -484,7 +484,7 @@ public class SegmentTests {
                 flipped[positions[3] + offset] ^= 0xFF;
                 await File.WriteAllBytesAsync(path, flipped, TestContext.Current.CancellationToken);
 
-                var open = async () => await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+                var open = async () => await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
                 await open.Should().ThrowExactlyAsync<InvalidDataException>();
 
                 // Nothing is cut: the file is unchanged.
@@ -514,7 +514,7 @@ public class SegmentTests {
                     damaged[positions[4] + offset] ^= 0xFF;
                     await File.WriteAllBytesAsync(path, damaged.AsMemory(0, (int)(positions[6] + torn)), TestContext.Current.CancellationToken);
 
-                    using var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+                    using var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
                     segment.LastIndex.Should().Be(4);
                     segment.Length.Should().Be(positions[4]);
                     new FileInfo(path).Length.Should().Be(positions[4]);
@@ -540,7 +540,7 @@ public class SegmentTests {
                 (MakeEntry(4), false));
             await File.WriteAllBytesAsync(path, bytes, TestContext.Current.CancellationToken);
 
-            using (var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken)) {
                 segment.LastIndex.Should().Be(2);
                 segment.Length.Should().Be(RecordFormat.GetLength(16) * 2);
             }
@@ -554,7 +554,7 @@ public class SegmentTests {
                 (MakeEntry(5), true));
             await File.WriteAllBytesAsync(path, withLaterWrite, TestContext.Current.CancellationToken);
 
-            var open = async () => await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+            var open = async () => await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
             await open.Should().ThrowExactlyAsync<InvalidDataException>();
 
             // Nothing is cut: the file is unchanged.
@@ -567,7 +567,7 @@ public class SegmentTests {
             using var directory = new TempDirectory();
             var path = directory.GetFilePath("segment.seg");
 
-            using (var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken)) {
                 await segment.AppendAsync(MakeEntries(1, 1));
                 await segment.AppendAsync(MakeEntries(2, 3));
                 await segment.AppendAsync(MakeEntries(5, 5));
@@ -593,7 +593,7 @@ public class SegmentTests {
             using var directory = new TempDirectory();
             var path = directory.GetFilePath("segment.seg");
 
-            using (var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken)) {
                 segment.LastIndex.Should().Be(0);
                 segment.Length.Should().Be(0);
                 await segment.AppendAsync(MakeEntries(1, 2));
@@ -601,7 +601,7 @@ public class SegmentTests {
             }
 
             var otherPath = directory.GetFilePath("other.seg");
-            using (var segment = await Segment.OpenAsync(otherPath, 1001, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(otherPath, 1001, false, TestContext.Current.CancellationToken)) {
                 segment.LastIndex.Should().Be(1000);
                 segment.Length.Should().Be(0);
                 await segment.AppendAsync(MakeEntries(1001, 2));
@@ -615,7 +615,7 @@ public class SegmentTests {
             using var directory = new TempDirectory();
             var path = directory.GetFilePath("segment.seg");
 
-            var open = async () => await Segment.OpenAsync(path, 0, TestContext.Current.CancellationToken);
+            var open = async () => await Segment.OpenAsync(path, 0, false, TestContext.Current.CancellationToken);
 
             await open.Should().ThrowAsync<ArgumentOutOfRangeException>();
             File.Exists(path).Should().BeFalse();
@@ -630,12 +630,12 @@ public class SegmentTests {
             var tornLength = RecordFormat.GetLength(10) * 2 + 7;
             await File.WriteAllBytesAsync(path, fileBytes.AsMemory(0, tornLength), TestContext.Current.CancellationToken);
 
-            using (var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken)) {
                 segment.LastIndex.Should().Be(2);
                 await segment.AppendAsync(MakeEntries(3, 2, payloadLength: 20, seed: 1));
             }
 
-            using (var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken)) {
                 segment.LastIndex.Should().Be(4);
 
                 long sum = 0;
@@ -658,13 +658,13 @@ public class SegmentTests {
             var path = directory.GetFilePath("segment.seg");
             const int bigPayloadLength = 1024 * 1024;
 
-            using (var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken)) {
                 await segment.AppendAsync(MakeEntries(1, 1, payloadLength: 8));
                 await segment.AppendAsync(new[] { MakeEntry(2, payloadLength: bigPayloadLength) });
                 await segment.AppendAsync(MakeEntries(3, 1, payloadLength: 9));
             }
 
-            using (var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken)) {
+            using (var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken)) {
                 segment.LastIndex.Should().Be(3);
 
                 var buffer = new byte[segment.GetRecordLength(2)];
@@ -674,12 +674,187 @@ public class SegmentTests {
             }
         }
     }
+    public class Sealed {
+        [Fact]
+        public async Task A_sealed_segment_refuses_a_torn_tail() {
+            using var directory = new TempDirectory();
+            var path = directory.GetFilePath("segment.seg");
+
+            var fileBytes = await WriteWritesAsync(path, MakeEntries(1, 2, payloadLength: 10), MakeEntries(3, 1, payloadLength: 40));
+            var startOfThird = RecordFormat.GetLength(10) * 2;
+            var endOfThird = startOfThird + RecordFormat.GetLength(40);
+
+            // Every torn length of the third record, from its first byte to one byte
+            // before its end: a sealed segment was complete before it was sealed.
+            for (var length = startOfThird + 1; length < endOfThird; length++) {
+                var torn = fileBytes.AsMemory(0, length).ToArray();
+                await File.WriteAllBytesAsync(path, torn, TestContext.Current.CancellationToken);
+
+                var open = async () => await Segment.OpenAsync(path, 1, isSealed: true, TestContext.Current.CancellationToken);
+                await open.Should().ThrowExactlyAsync<InvalidDataException>();
+
+                // Nothing is cut: the file is unchanged.
+                new FileInfo(path).Length.Should().Be(length);
+                (await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken)).Should().Equal(torn);
+            }
+        }
+
+        [Fact]
+        public async Task A_sealed_segment_refuses_a_flipped_byte() {
+            using var directory = new TempDirectory();
+            var path = directory.GetFilePath("segment.seg");
+
+            var fileBytes = await WriteWritesAsync(path, MakeEntries(1, 2, payloadLength: 10), MakeEntries(3, 1, payloadLength: 40));
+            var startOfThird = RecordFormat.GetLength(10) * 2;
+            var thirdLength = RecordFormat.GetLength(40);
+
+            for (var offset = 0; offset < thirdLength; offset++) {
+                var flipped = (byte[])fileBytes.Clone();
+                flipped[startOfThird + offset] ^= 0xFF;
+                await File.WriteAllBytesAsync(path, flipped, TestContext.Current.CancellationToken);
+
+                var open = async () => await Segment.OpenAsync(path, 1, isSealed: true, TestContext.Current.CancellationToken);
+                await open.Should().ThrowExactlyAsync<InvalidDataException>();
+
+                // Nothing is cut: the file is unchanged.
+                new FileInfo(path).Length.Should().Be(flipped.Length);
+                (await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken)).Should().Equal(flipped);
+            }
+        }
+    }
+    public class TruncateFrom {
+        [Fact]
+        public async Task TruncateFrom_cuts_and_fsyncs() {
+            using var directory = new TempDirectory();
+            var path = directory.GetFilePath("segment.seg");
+            var stream = new CountingFileStream(path);
+
+            using (var segment = await Segment.OpenAsync(stream, 1, false, TestContext.Current.CancellationToken)) {
+                await segment.AppendAsync(MakeEntries(1, 10));
+                var flushesBefore = stream.FlushToDiskCount;
+                var lengthOfOneToFive = RecordFormat.GetLength(16) * 5;
+
+                segment.TruncateFrom(6);
+
+                stream.FlushToDiskCount.Should().Be(flushesBefore + 1);
+                segment.LastIndex.Should().Be(5);
+                segment.Length.Should().Be(lengthOfOneToFive);
+                new FileInfo(path).Length.Should().Be(lengthOfOneToFive);
+
+                await segment.AppendAsync(MakeEntries(6, 2, seed: 1));
+                segment.LastIndex.Should().Be(7);
+            }
+
+            using (var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken)) {
+                segment.LastIndex.Should().Be(7);
+                for (var index = 1ul; index <= 7; index++) {
+                    var buffer = new byte[segment.GetRecordLength(index)];
+                    var entry = await segment.ReadAsync(index, buffer, TestContext.Current.CancellationToken);
+                    entry.Payload.Span.SequenceEqual(MakePayload(index, 16, seed: index < 6 ? 0 : 1)).Should().BeTrue();
+                }
+            }
+        }
+
+        [Fact]
+        public async Task TruncateFrom_the_first_index_empties_the_segment() {
+            using var directory = new TempDirectory();
+            var path = directory.GetFilePath("segment.seg");
+            using var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
+
+            await segment.AppendAsync(MakeEntries(1, 5));
+
+            segment.TruncateFrom(1);
+
+            segment.LastIndex.Should().Be(0);
+            segment.Length.Should().Be(0);
+            new FileInfo(path).Length.Should().Be(0);
+
+            await segment.AppendAsync(MakeEntries(1, 2, seed: 1));
+            segment.LastIndex.Should().Be(2);
+        }
+
+        [Fact]
+        public async Task TruncateFrom_past_the_end_does_nothing() {
+            using var directory = new TempDirectory();
+            var path = directory.GetFilePath("segment.seg");
+            var stream = new CountingFileStream(path);
+
+            using (var segment = await Segment.OpenAsync(stream, 1, false, TestContext.Current.CancellationToken)) {
+                await segment.AppendAsync(MakeEntries(1, 5));
+                var flushesBefore = stream.FlushToDiskCount;
+                var lengthBefore = segment.Length;
+
+                segment.TruncateFrom(6);
+
+                stream.FlushToDiskCount.Should().Be(flushesBefore);
+                segment.LastIndex.Should().Be(5);
+                segment.Length.Should().Be(lengthBefore);
+                new FileInfo(path).Length.Should().Be(lengthBefore);
+            }
+
+            // On an empty segment its first index is one past its last: also nothing.
+            var emptyPath = directory.GetFilePath("empty.seg");
+            using (var segment = await Segment.OpenAsync(emptyPath, 1, false, TestContext.Current.CancellationToken)) {
+                segment.TruncateFrom(1);
+
+                segment.LastIndex.Should().Be(0);
+                segment.Length.Should().Be(0);
+                new FileInfo(emptyPath).Length.Should().Be(0);
+            }
+        }
+
+        [Fact]
+        public async Task TruncateFrom_refuses_an_index_outside_the_segment() {
+            using var directory = new TempDirectory();
+            var path = directory.GetFilePath("segment.seg");
+            using var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
+            await segment.AppendAsync(MakeEntries(1, 5));
+
+            var tooLow = () => segment.TruncateFrom(0);
+            tooLow.Should().ThrowExactly<ArgumentOutOfRangeException>();
+
+            var tooHigh = () => segment.TruncateFrom(7);
+            tooHigh.Should().ThrowExactly<ArgumentOutOfRangeException>();
+
+            // The segment is still usable.
+            segment.LastIndex.Should().Be(5);
+            await segment.AppendAsync(MakeEntries(6, 1));
+            segment.LastIndex.Should().Be(6);
+        }
+
+        [Fact]
+        public async Task A_failed_truncate_faults_the_segment() {
+            using var directory = new TempDirectory();
+            var path = directory.GetFilePath("segment.seg");
+
+            using (var stream = new FaultyFileStream(path))
+            using (var segment = await Segment.OpenAsync(stream, 1, false, TestContext.Current.CancellationToken)) {
+                await segment.AppendAsync(MakeEntries(1, 3));
+                var recordLength = segment.GetRecordLength(1);
+
+                stream.FailNextSetLength = true;
+
+                var truncate = () => segment.TruncateFrom(2);
+                var fault = truncate.Should().ThrowExactly<IOException>().Which;
+
+                var appendAgain = async () => await segment.AppendAsync(MakeEntries(3, 1));
+                (await appendAgain.Should().ThrowExactlyAsync<IOException>().WaitAsync(Timeout, TestContext.Current.CancellationToken)).Which.Should().BeSameAs(fault);
+
+                var buffer = new byte[recordLength];
+                var readAgain = async () => await segment.ReadAsync(1, buffer, TestContext.Current.CancellationToken);
+                (await readAgain.Should().ThrowExactlyAsync<IOException>().WaitAsync(Timeout, TestContext.Current.CancellationToken)).Which.Should().BeSameAs(fault);
+
+                var truncateAgain = () => segment.TruncateFrom(3);
+                truncateAgain.Should().ThrowExactly<IOException>().Which.Should().BeSameAs(fault);
+            }
+        }
+    }
     public class ReadAsync {
         [Fact]
         public async Task Refuses_an_index_outside_the_segment() {
             using var directory = new TempDirectory();
             var path = directory.GetFilePath("segment.seg");
-            using var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+            using var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
             await segment.AppendAsync(MakeEntries(1, 2));
 
             var buffer = new byte[RecordFormat.GetLength(16)];
@@ -695,7 +870,7 @@ public class SegmentTests {
         public async Task Refuses_a_too_short_buffer() {
             using var directory = new TempDirectory();
             var path = directory.GetFilePath("segment.seg");
-            using var segment = await Segment.OpenAsync(path, 1, TestContext.Current.CancellationToken);
+            using var segment = await Segment.OpenAsync(path, 1, false, TestContext.Current.CancellationToken);
             await segment.AppendAsync(MakeEntries(1, 1));
 
             var buffer = new byte[RecordFormat.GetLength(16) - 1];
@@ -710,7 +885,7 @@ public class SegmentTests {
             var path = directory.GetFilePath("segment.seg");
 
             using var file = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite, bufferSize: 0, FileOptions.Asynchronous);
-            using var segment = await Segment.OpenAsync(file, 1, TestContext.Current.CancellationToken);
+            using var segment = await Segment.OpenAsync(file, 1, false, TestContext.Current.CancellationToken);
             await segment.AppendAsync(MakeEntries(1, 3));
 
             var recordLength = RecordFormat.GetLength(16);
