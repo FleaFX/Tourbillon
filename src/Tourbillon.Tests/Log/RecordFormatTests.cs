@@ -75,14 +75,21 @@ public class RecordFormatTests {
                 RecordFormat.TryRead(destination, out _, out _);
             }
 
-            var before = GC.GetAllocatedBytesForCurrentThread();
+            // The runtime can allocate once on this thread while a round runs (seen on
+            // Linux in CI: 240 bytes in one round of 1000 calls). An allocation per call
+            // shows in every round, so the quietest of three rounds must be zero.
+            var allocated = long.MaxValue;
+            for (var round = 0; round < 3; round++) {
+                var before = GC.GetAllocatedBytesForCurrentThread();
 
-            for (var i = 0; i < 1000; i++) {
-                RecordFormat.Write(entry, destination);
-                RecordFormat.TryRead(destination, out _, out _);
+                for (var i = 0; i < 1000; i++) {
+                    RecordFormat.Write(entry, destination);
+                    RecordFormat.TryRead(destination, out _, out _);
+                }
+
+                allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
             }
 
-            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             allocated.Should().Be(0);
         }
     }
