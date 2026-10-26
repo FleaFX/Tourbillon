@@ -64,6 +64,7 @@
     <li>The network is back. Machine 3 asks the trial question again. Machine 2 answers "no": it hears its leader just fine. That also helps when the network only half works: if machine 3 cannot hear the leader but machine 2 can, machine 2 still says "no". So machine 3 still does not raise its term, and soon hears from machine 1 itself.</li>
   </ol>
   <p>The same holds for a copy that was removed but keeps running: it gets "no" from every copy that still hears the leader, and can never make it step down.</p>
+  <p>The trial question also changes the election example of <a href="04-several-machines.html">chapter 4</a> a little. Machine 3 asks it first, and machine 2 answers "no", because its log has entry 800: so machine 3 does not even raise its term. Then machine 2 asks the trial question, machine 3 says "yes", and machine 2 leads in term 5 instead of 6, with entry 800.</p>
 
   <div class="promises">
     <strong>What must always be true</strong>

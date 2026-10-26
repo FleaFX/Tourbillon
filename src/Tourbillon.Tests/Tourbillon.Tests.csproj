@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Tourbillon\Tourbillon.csproj" />
+    <ProjectReference Include="..\Tourbillon.Testing\Tourbillon.Testing.csproj" />
   </ItemGroup>
 
 </Project>
