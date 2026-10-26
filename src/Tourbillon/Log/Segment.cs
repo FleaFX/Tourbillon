@@ -14,27 +14,30 @@ sealed class Segment : IDisposable {
 
     readonly FileStream _file;
     readonly ulong _firstIndex;
+    readonly bool _isSealed;
     RecordLocation[] _locations;
     int _count;
     long _length;
     IOException? _fault;
 
-    Segment(FileStream file, ulong firstIndex) {
+    Segment(FileStream file, ulong firstIndex, bool isSealed) {
         _file = file;
         _firstIndex = firstIndex;
+        _isSealed = isSealed;
         _locations = new RecordLocation[InitialCapacity];
     }
 
     /// <summary>
     /// Opens or creates the segment file at <paramref name="path"/>, whose first entry has
-    /// index <paramref name="firstIndex"/>, and recovers it.
+    /// index <paramref name="firstIndex"/>, and recovers it; a sealed segment refuses any
+    /// bad record instead of cutting it.
     /// </summary>
-    public static async ValueTask<Segment> OpenAsync(string path, ulong firstIndex, CancellationToken cancellationToken = default) {
+    public static async ValueTask<Segment> OpenAsync(string path, ulong firstIndex, bool isSealed, CancellationToken cancellationToken = default) {
         ArgumentOutOfRangeException.ThrowIfZero(firstIndex);
 
         var file = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, bufferSize: 0, FileOptions.Asynchronous);
         try {
-            return await OpenAsync(file, firstIndex, cancellationToken).ConfigureAwait(false);
+            return await OpenAsync(file, firstIndex, isSealed, cancellationToken).ConfigureAwait(false);
         } catch {
             file.Dispose();
             throw;
@@ -42,12 +45,13 @@ sealed class Segment : IDisposable {
     }
 
     /// <summary>
-    /// Recovers the segment in <paramref name="file"/>, which the segment owns from now on.
+    /// Recovers the segment in <paramref name="file"/>, which the segment owns from now on;
+    /// a sealed segment refuses any bad record instead of cutting it.
     /// </summary>
-    public static async ValueTask<Segment> OpenAsync(FileStream file, ulong firstIndex, CancellationToken cancellationToken = default) {
+    public static async ValueTask<Segment> OpenAsync(FileStream file, ulong firstIndex, bool isSealed, CancellationToken cancellationToken = default) {
         ArgumentOutOfRangeException.ThrowIfZero(firstIndex);
 
-        var segment = new Segment(file, firstIndex);
+        var segment = new Segment(file, firstIndex, isSealed);
         try {
             await segment.RecoverAsync(cancellationToken).ConfigureAwait(false);
         } catch {
@@ -72,6 +76,16 @@ sealed class Segment : IDisposable {
     /// The number of bytes of the segment's records on disk.
     /// </summary>
     public long Length => _length;
+
+    /// <summary>
+    /// The path of the segment file.
+    /// </summary>
+    public string Path => _file.Name;
+
+    /// <summary>
+    /// Whether the segment is faulted and refuses everything.
+    /// </summary>
+    public bool IsFaulted => _fault is not null;
 
     /// <summary>
     /// The term of the entry at <paramref name="index"/>, from memory.
@@ -122,7 +136,7 @@ sealed class Segment : IDisposable {
                 await _file.WriteAsync(buffer.AsMemory(0, (int)total)).ConfigureAwait(false);
                 _file.Flush(flushToDisk: true);
             } catch (Exception writeException) {
-                CutBack(lengthBeforeBatch, writeException);
+                CutTo(lengthBeforeBatch, writeException, "The segment could not cut back a failed write and refuses everything.");
                 throw;
             }
         } finally {
@@ -135,6 +149,26 @@ sealed class Segment : IDisposable {
             position += RecordFormat.GetLength(entries.Span[i].Payload.Length);
         }
 
+        _length = position;
+    }
+
+    /// <summary>
+    /// Removes the entry at <paramref name="index"/> and every entry after it, and fsyncs
+    /// the cut; when that fails, the segment is faulted.
+    /// </summary>
+    public void TruncateFrom(ulong index) {
+        if (_fault is { } fault)
+            throw fault;
+
+        if (index < _firstIndex || index > LastIndex + 1)
+            throw new ArgumentOutOfRangeException(nameof(index), index, $"The index must be within {_firstIndex} .. {LastIndex + 1}.");
+
+        if (index == LastIndex + 1)
+            return;
+
+        var position = _locations[(int)(index - _firstIndex)].Position;
+        CutTo(position, null, "The segment could not truncate and refuses everything.");
+        _count = (int)(index - _firstIndex);
         _length = position;
     }
 
@@ -253,6 +287,12 @@ sealed class Segment : IDisposable {
             }
 
             if (stopped) {
+                // A sealed segment was complete before it was sealed: any change is
+                // damage, refused without the search for a later write and without a
+                // cut.
+                if (_isSealed)
+                    throw new InvalidDataException($"The sealed segment '{_file.Name}' is damaged at position {position}: the record of entry {expectedIndex} is not complete.");
+
                 // Look behind the bad record for the first record of a later
                 // write: proof that the bad record was already on disk. That is
                 // damage: the segment refuses to open, and nothing is cut.
@@ -387,19 +427,21 @@ sealed class Segment : IDisposable {
     }
 
     /// <summary>
-    /// Cuts the file back to <paramref name="position"/>, before a batch whose write or
-    /// fsync failed, and fsyncs the cut: without that fsync a crash right after could
-    /// bring the failed batch's bytes back from disk, and recovery would take them as
-    /// entries. When the cut itself fails, the segment is faulted and refuses
-    /// everything from now on.
+    /// Cuts the file to <paramref name="position"/>, moves the write position there and
+    /// fsyncs the cut: without that fsync a crash right after could bring back bytes
+    /// that were meant to go, and recovery would take them as entries. When the cut
+    /// itself fails, the segment is faulted and refuses everything from now on: the
+    /// entries that should be gone may still be on disk and come back after a
+    /// restart. <paramref name="cause"/> is the failure the cut answers, when there is
+    /// one.
     /// </summary>
-    void CutBack(long position, Exception writeException) {
+    void CutTo(long position, Exception? cause, string failure) {
         try {
             _file.SetLength(position);
             _file.Position = position;
             _file.Flush(flushToDisk: true);
         } catch (Exception cutException) {
-            _fault = new IOException("The segment could not cut back a failed write and refuses everything.", new AggregateException(writeException, cutException));
+            _fault = new IOException(failure, cause is null ? cutException : new AggregateException(cause, cutException));
             throw _fault;
         }
     }

@@ -9,4 +9,7 @@
   <Folder Name="/Tests/">
     <Project Path="Tourbillon.Tests/Tourbillon.Tests.csproj" />
   </Folder>
+  <Folder Name="/Benchmarks/">
+    <Project Path="Tourbillon.Benchmarks/Tourbillon.Benchmarks.csproj" />
+  </Folder>
 </Solution>
