@@ -14,7 +14,9 @@ partial class Replica {
     /// full. A NoOp the own log has no room for refuses the waiting proposals, storage
     /// full: they are in no log, and the gate stays closed. The NoOp waits for the next
     /// turn, the heartbeat at the latest; a flush that wrote nothing and ended nothing
-    /// reports no work.
+    /// reports no work. An append that fails without a fault refuses the proposals of
+    /// the batch — the entries are in no log — and the NoOp stays pending; a faulted
+    /// log breaks the copy: the in-flight batch ends unknown.
     /// </summary>
     /// <returns>Whether the flush did any work.</returns>
     async ValueTask<bool> FlushAsync() {
@@ -81,7 +83,33 @@ partial class Replica {
                 }
             }
 
-            var appended = await _log.AppendAsync(rented.AsMemory(0, batch.Count)).ConfigureAwait(false);
+            int appended;
+            try {
+                appended = await _log.AppendAsync(rented.AsMemory(0, batch.Count)).ConfigureAwait(false);
+            } catch (IOException) {
+                // The write was cut back: the entries of the batch are in no log, so
+                // the proposals are refused and nothing is sent; the NoOp stays
+                // pending. A faulted log broke the copy: the in-flight batch ends
+                // unknown here — it is in no list — and the exception breaks the turn.
+                lock (_proposalsLock)
+                    _appending = null;
+                if (_log.IsFaulted) {
+                    foreach (var proposal in batch)
+                        proposal?.Complete(ProposalResult.Unknown);
+                    throw;
+                }
+
+                var ended = false;
+                foreach (var proposal in batch) {
+                    if (proposal is { } failed) {
+                        failed.Index = 0;
+                        failed.Complete(ProposalResult.Refused(RefusalReason.WriteFailed));
+                        ended = true;
+                    }
+                }
+
+                return ended;
+            }
 
             List<PendingProposal>? written = null;
             List<PendingProposal>? refused = null;
@@ -177,13 +205,15 @@ partial class Replica {
 
     /// <summary>
     /// Commits up to <paramref name="index"/>: the ready gate opens when the NoOp of the
-    /// term is committed, and the written proposals up to the index are accepted.
+    /// term is committed, and the written proposals up to the index are accepted. The
+    /// commit index is published for the feed, which wakes a waiting reader; a reader
+    /// that is not waiting costs the commit nothing.
     /// </summary>
     void Commit(ulong index) {
         if (index <= _commitIndex)
             return;
 
-        _commitIndex = index;
+        Volatile.Write(ref _commitIndex, index);
         if (_role == ReplicaRole.Leader && !_isReady && index >= _noOpIndex)
             _isReady = true;
 
@@ -202,6 +232,8 @@ partial class Replica {
         if (accepted is not null)
             foreach (var proposal in accepted)
                 proposal.Complete(ProposalResult.Accepted(proposal.Index));
+
+        Volatile.Read(ref _feedReader)?.TrySetResult(true);
     }
 
     /// <summary>
@@ -260,8 +292,10 @@ partial class Replica {
     /// timer, and the time of the request counts as "heard a leader". The consistency
     /// check reports a conflict with a hint; entries this copy already has are skipped;
     /// a real conflict truncates — never at or below the commit index, a broken rule
-    /// throws — and the new entries are appended as one batch. Then the commit index
-    /// moves to the minimum of the leader's and the last index this request confirmed.
+    /// throws — and the new entries are appended as one batch. A write that fails
+    /// without a fault leaves this copy silent: the leader sends again with the next
+    /// heartbeat. Then the commit index moves to the minimum of the leader's and the
+    /// last index this request confirmed.
     /// </summary>
     async ValueTask HandleAppendRequestAsync(ReceivedAppendRequest message) {
         if (message.Term < _term) {
@@ -308,19 +342,28 @@ partial class Replica {
             var index = message.PrevIndex + 1 + (ulong)position;
             if (index <= _commitIndex)
                 throw new InvalidDataException($"The leader {message.From} asks this copy to replace the committed entry at index {index}.");
-
-            _log.TruncateFrom(index);
         }
 
-        // Append the new entries as one batch.
+        // A write failure at a follower is no fault of this copy: no response, and the
+        // leader sends again with the next heartbeat. A faulted log breaks the copy.
         var result = AppendResult.Stored;
         var confirmed = message.PrevIndex + (ulong)message.Entries.Length;
-        if (position < message.Entries.Length) {
-            var appended = await _log.AppendAsync(message.Entries.AsMemory(position)).ConfigureAwait(false);
-            if (appended < message.Entries.Length - position)
-                result = AppendResult.Full;
+        try {
+            if (position < message.Entries.Length)
+                _log.TruncateFrom(message.PrevIndex + 1 + (ulong)position);
 
-            confirmed = message.PrevIndex + (ulong)position + (ulong)appended;
+            if (position < message.Entries.Length) {
+                var appended = await _log.AppendAsync(message.Entries.AsMemory(position)).ConfigureAwait(false);
+                if (appended < message.Entries.Length - position)
+                    result = AppendResult.Full;
+
+                confirmed = message.PrevIndex + (ulong)position + (ulong)appended;
+            }
+        } catch (IOException) {
+            if (_log.IsFaulted)
+                throw;
+
+            return;
         }
 
         Commit(Math.Min(message.Commit, confirmed));

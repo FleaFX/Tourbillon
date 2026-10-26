@@ -1,45 +1,54 @@
+using Tourbillon.Raft;
+
 namespace Tourbillon.Log;
 
 /// <summary>
 /// A log on disk: a directory of segments, appended to at the end, truncated from an
-/// index and removed from the start a whole segment at a time. One caller at a time.
+/// index and removed from the start a whole segment at a time. One writer at a time;
+/// the entries a reader takes are published, so a reader beside the writer sees the
+/// entries a commit index points at.
 /// </summary>
-sealed class SegmentedLog : IDisposable {
+sealed class SegmentedLog : IRaftLog, IDisposable {
+    readonly IFileSystem _fs;
     readonly string _directory;
     readonly long _segmentSize;
     readonly StorageLimit _storage;
+    readonly object _segmentsLock = new();
     readonly List<Segment> _segments = new();
     IOException? _fault;
     bool _disposed;
 
-    SegmentedLog(string directory, long segmentSize, StorageLimit storage) {
+    SegmentedLog(IFileSystem fs, string directory, long segmentSize, StorageLimit storage) {
+        _fs = fs;
         _directory = directory;
         _segmentSize = segmentSize;
         _storage = storage;
     }
 
     /// <summary>
-    /// Opens or creates the log in <paramref name="directory"/> and recovers it: every
-    /// segment is read, only the last one may have a torn tail, and damage in a sealed
-    /// segment or a gap between segments refuses to open.
+    /// Opens or creates the log in <paramref name="directory"/> through
+    /// <paramref name="fileSystem"/> and recovers it: every segment is read, only the
+    /// last one may have a torn tail, and damage in a sealed segment or a gap
+    /// between segments refuses to open.
     /// </summary>
     public static async ValueTask<SegmentedLog> OpenAsync(
+        IFileSystem fileSystem,
         string directory,
         long segmentSize,
         StorageLimit storage,
         CancellationToken cancellationToken = default
     ) {
-        var existed = Directory.Exists(directory);
-        Directory.CreateDirectory(directory);
+        var existed = fileSystem.DirectoryExists(directory);
+        fileSystem.CreateDirectory(directory);
         if (!existed) {
             // The directory itself is new: its entry in the parent must be durable.
             var parent = Path.GetDirectoryName(Path.GetFullPath(directory));
             if (parent is { Length: > 0 })
-                DirectorySync.Flush(parent);
+                fileSystem.FlushDirectory(parent);
         }
 
         var files = new List<(string Path, ulong FirstIndex)>();
-        foreach (var file in Directory.EnumerateFiles(directory)) {
+        foreach (var file in fileSystem.GetFiles(directory)) {
             // Other files (state files, *.tmp) are not segments and are left alone.
             if (Path.GetExtension(file) != ".seg")
                 continue;
@@ -50,11 +59,11 @@ sealed class SegmentedLog : IDisposable {
         // The names are 20 digits, so sorting by first index puts the segments in order.
         files.Sort((x, y) => x.FirstIndex.CompareTo(y.FirstIndex));
 
-        var log = new SegmentedLog(directory, segmentSize, storage);
+        var log = new SegmentedLog(fileSystem, directory, segmentSize, storage);
         try {
             for (var i = 0; i < files.Count; i++) {
                 // Only the last segment may have a torn tail.
-                var segment = await Segment.OpenAsync(files[i].Path, files[i].FirstIndex, isSealed: i < files.Count - 1, cancellationToken).ConfigureAwait(false);
+                var segment = await Segment.OpenAsync(fileSystem, files[i].Path, files[i].FirstIndex, isSealed: i < files.Count - 1, cancellationToken).ConfigureAwait(false);
                 if (i > 0) {
                     var previous = log._segments[^1];
                     if (segment.FirstIndex != previous.LastIndex + 1)
@@ -66,9 +75,9 @@ sealed class SegmentedLog : IDisposable {
 
             // A new log starts with one empty segment.
             if (log._segments.Count == 0) {
-                var segment = await Segment.OpenAsync(Path.Combine(directory, $"{1UL:D20}.seg"), 1, isSealed: false, cancellationToken).ConfigureAwait(false);
+                var segment = await Segment.OpenAsync(fileSystem, Path.Combine(directory, $"{1UL:D20}.seg"), 1, isSealed: false, cancellationToken).ConfigureAwait(false);
                 log._segments.Add(segment);
-                DirectorySync.Flush(directory);
+                fileSystem.FlushDirectory(directory);
             }
         } catch {
             foreach (var segment in log._segments)
@@ -86,35 +95,62 @@ sealed class SegmentedLog : IDisposable {
     /// <summary>
     /// The index of the first entry still kept, also when the log is empty.
     /// </summary>
-    public ulong FirstIndex => _segments[0].FirstIndex;
+    public ulong FirstIndex {
+        get {
+            lock (_segmentsLock)
+                return _segments[0].FirstIndex;
+        }
+    }
 
     /// <summary>
     /// The index of the last entry, or <see cref="FirstIndex"/> - 1 when the log is empty.
     /// </summary>
-    public ulong LastIndex => _segments[^1].LastIndex;
+    public ulong LastIndex {
+        get {
+            lock (_segmentsLock)
+                return _segments[^1].LastIndex;
+        }
+    }
 
     /// <summary>
     /// The number of bytes of the log's records on disk.
     /// </summary>
     public long Length {
         get {
-            long total = 0;
-            foreach (var segment in _segments)
-                total += segment.Length;
+            lock (_segmentsLock) {
+                long total = 0;
+                foreach (var segment in _segments)
+                    total += segment.Length;
 
-            return total;
+                return total;
+            }
         }
     }
 
     /// <summary>
-    /// The term of the entry at <paramref name="index"/>, from memory.
+    /// Whether the log is faulted and refuses everything.
     /// </summary>
-    public ulong GetTerm(ulong index) => FindSegment(index).GetTerm(index);
+    public bool IsFaulted => _fault is not null;
+
+    /// <summary>
+    /// The term of the entry at <paramref name="index"/>, from memory; 0 for the place
+    /// before the first entry.
+    /// </summary>
+    public ulong GetTerm(ulong index) {
+        if (index == 0)
+            return 0;
+
+        lock (_segmentsLock)
+            return FindSegment(index).GetTerm(index);
+    }
 
     /// <summary>
     /// The number of bytes the record of the entry at <paramref name="index"/> takes.
     /// </summary>
-    public int GetRecordLength(ulong index) => FindSegment(index).GetRecordLength(index);
+    public int GetRecordLength(ulong index) {
+        lock (_segmentsLock)
+            return FindSegment(index).GetRecordLength(index);
+    }
 
     /// <summary>
     /// Appends the longest start of <paramref name="entries"/> that fits in the storage
@@ -134,7 +170,9 @@ sealed class SegmentedLog : IDisposable {
             return 0;
 
         var written = false;
-        var active = _segments[^1];
+        Segment active;
+        lock (_segmentsLock)
+            active = _segments[^1];
         try {
             // Rotation before the batch: an idle log keeps no empty file.
             if (active.LastIndex >= active.FirstIndex && active.Length >= _segmentSize) {
@@ -180,17 +218,29 @@ sealed class SegmentedLog : IDisposable {
             // Delete every segment that starts above the index, the newest first:
             // after every step the log on disk is the old log cut at some index at
             // or above the given one, contiguous, also when a crash comes in between.
-            while (_segments[^1].FirstIndex > index) {
-                var segment = _segments[^1];
-                _segments.RemoveAt(_segments.Count - 1);
+            // The lock guards the list only; the file operations run beside it.
+            while (true) {
+                Segment segment;
+                lock (_segmentsLock) {
+                    if (_segments[^1].FirstIndex <= index)
+                        break;
+
+                    segment = _segments[^1];
+                    _segments.RemoveAt(_segments.Count - 1);
+                }
+
                 segment.Dispose();
-                File.Delete(segment.Path);
-                DirectorySync.Flush(_directory);
+                _fs.DeleteFile(segment.Path);
+                _fs.FlushDirectory(_directory);
             }
 
             // Truncate the segment that holds the index; it is now the active one,
             // also when that leaves it empty.
-            _segments[^1].TruncateFrom(index);
+            Segment active;
+            lock (_segmentsLock)
+                active = _segments[^1];
+
+            active.TruncateFrom(index);
         } catch (Exception exception) {
             Fault(exception);
             throw;
@@ -217,19 +267,30 @@ sealed class SegmentedLog : IDisposable {
         try {
             // Rotate first when the active segment lies completely at or below the
             // index, so that the log always has a file that says where it starts.
-            var active = _segments[^1];
+            Segment active;
+            lock (_segmentsLock)
+                active = _segments[^1];
+
             if (active.LastIndex >= active.FirstIndex && active.LastIndex <= index)
                 await OpenNextSegmentAsync(active.LastIndex).ConfigureAwait(false);
 
             // Delete, oldest first, every segment that holds at least one entry and
             // whose last index is at or below the index: the remaining segments stay
-            // a contiguous suffix after a crash at any point.
-            while (_segments.Count > 1 && _segments[0].LastIndex >= _segments[0].FirstIndex && _segments[0].LastIndex <= index) {
-                var segment = _segments[0];
-                _segments.RemoveAt(0);
+            // a contiguous suffix after a crash at any point. The lock guards the
+            // list only; the file operations run beside it.
+            while (true) {
+                Segment segment;
+                lock (_segmentsLock) {
+                    if (_segments.Count <= 1 || _segments[0].LastIndex < _segments[0].FirstIndex || _segments[0].LastIndex > index)
+                        break;
+
+                    segment = _segments[0];
+                    _segments.RemoveAt(0);
+                }
+
                 segment.Dispose();
-                File.Delete(segment.Path);
-                DirectorySync.Flush(_directory);
+                _fs.DeleteFile(segment.Path);
+                _fs.FlushDirectory(_directory);
             }
         } catch (Exception exception) {
             Fault(exception);
@@ -247,7 +308,32 @@ sealed class SegmentedLog : IDisposable {
         if (_fault is { } fault)
             throw fault;
 
-        return FindSegment(index).ReadAsync(index, buffer, cancellationToken);
+        Segment segment;
+        lock (_segmentsLock)
+            segment = FindSegment(index);
+
+        return segment.ReadAsync(index, buffer, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the entries from <paramref name="firstIndex"/> up to at most
+    /// <paramref name="lastIndex"/>, as many whole records as fit in the buffer and
+    /// the entry array, with one read; the payloads point into the buffer. One call
+    /// reads within one segment: the batch may end at a segment boundary.
+    /// </summary>
+    /// <returns>The number of entries read; at least 1, the buffer must hold the first record.</returns>
+    public async ValueTask<int> ReadAsync(ulong firstIndex, ulong lastIndex, Memory<byte> buffer, Memory<Entry> entries, CancellationToken cancellationToken = default) {
+        if (_fault is { } fault)
+            throw fault;
+
+        Segment segment;
+        lock (_segmentsLock) {
+            segment = FindSegment(firstIndex);
+            if (lastIndex < firstIndex)
+                throw new ArgumentOutOfRangeException(nameof(lastIndex), lastIndex, $"The last index must be at or above the first one ({firstIndex}).");
+        }
+
+        return await segment.ReadAsync(firstIndex, lastIndex, buffer, entries, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -256,7 +342,11 @@ sealed class SegmentedLog : IDisposable {
             return;
 
         _disposed = true;
-        foreach (var segment in _segments)
+        Segment[] segments;
+        lock (_segmentsLock)
+            segments = _segments.ToArray();
+
+        foreach (var segment in segments)
             segment.Dispose();
 
         // The log holds no more.
@@ -269,15 +359,17 @@ sealed class SegmentedLog : IDisposable {
     /// </summary>
     async ValueTask<Segment> OpenNextSegmentAsync(ulong lastIndex) {
         var path = Path.Combine(_directory, $"{(lastIndex + 1):D20}.seg");
-        var segment = await Segment.OpenAsync(path, lastIndex + 1, isSealed: false).ConfigureAwait(false);
+        var segment = await Segment.OpenAsync(_fs, path, lastIndex + 1, isSealed: false).ConfigureAwait(false);
         try {
-            DirectorySync.Flush(_directory);
+            _fs.FlushDirectory(_directory);
         } catch {
             segment.Dispose();
             throw;
         }
 
-        _segments.Add(segment);
+        lock (_segmentsLock)
+            _segments.Add(segment);
+
         return segment;
     }
 
@@ -295,11 +387,12 @@ sealed class SegmentedLog : IDisposable {
 
     /// <summary>
     /// The segment that holds <paramref name="index"/>: the indexes of a log have no
-    /// holes, so it is the last segment whose first index is at or below it.
+    /// holes, so it is the last segment whose first index is at or below it. The lock
+    /// on the list of segments must be held.
     /// </summary>
     Segment FindSegment(ulong index) {
-        if (index < FirstIndex || index > LastIndex)
-            throw new ArgumentOutOfRangeException(nameof(index), index, $"The index must be within {FirstIndex} .. {LastIndex}.");
+        if (index < _segments[0].FirstIndex || index > _segments[^1].LastIndex)
+            throw new ArgumentOutOfRangeException(nameof(index), index, $"The index must be within {_segments[0].FirstIndex} .. {_segments[^1].LastIndex}.");
 
         var i = _segments.Count - 1;
         while (index < _segments[i].FirstIndex)

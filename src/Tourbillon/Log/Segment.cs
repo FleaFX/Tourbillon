@@ -4,7 +4,8 @@ namespace Tourbillon.Log;
 
 /// <summary>
 /// One segment file of a log: appends batches of entries with one write and one fsync,
-/// recovers after a crash and reads entries by index. One caller at a time.
+/// recovers after a crash and reads entries by index. One writer at a time; readers
+/// take the published state, so they see the entries a commit index points at.
 /// </summary>
 sealed class Segment : IDisposable {
     const int InitialCapacity = 1024;
@@ -12,30 +13,33 @@ sealed class Segment : IDisposable {
     // The size of the buffer the recovery reads the file with.
     const int RecoveryBufferSize = 64 * 1024;
 
-    readonly FileStream _file;
+    readonly IFile _file;
     readonly ulong _firstIndex;
     readonly bool _isSealed;
     RecordLocation[] _locations;
     int _count;
     long _length;
+    SegmentState _published;
     IOException? _fault;
 
-    Segment(FileStream file, ulong firstIndex, bool isSealed) {
+    Segment(IFile file, ulong firstIndex, bool isSealed) {
         _file = file;
         _firstIndex = firstIndex;
         _isSealed = isSealed;
         _locations = new RecordLocation[InitialCapacity];
+        _published = new SegmentState(_locations, 0, 0);
     }
 
     /// <summary>
-    /// Opens or creates the segment file at <paramref name="path"/>, whose first entry has
-    /// index <paramref name="firstIndex"/>, and recovers it; a sealed segment refuses any
+    /// Opens or creates the segment file at <paramref name="path"/> through
+    /// <paramref name="fileSystem"/>, whose first entry has index
+    /// <paramref name="firstIndex"/>, and recovers it; a sealed segment refuses any
     /// bad record instead of cutting it.
     /// </summary>
-    public static async ValueTask<Segment> OpenAsync(string path, ulong firstIndex, bool isSealed, CancellationToken cancellationToken = default) {
+    public static async ValueTask<Segment> OpenAsync(IFileSystem fileSystem, string path, ulong firstIndex, bool isSealed, CancellationToken cancellationToken = default) {
         ArgumentOutOfRangeException.ThrowIfZero(firstIndex);
 
-        var file = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, bufferSize: 0, FileOptions.Asynchronous);
+        var file = fileSystem.OpenFile(path);
         try {
             return await OpenAsync(file, firstIndex, isSealed, cancellationToken).ConfigureAwait(false);
         } catch {
@@ -48,7 +52,7 @@ sealed class Segment : IDisposable {
     /// Recovers the segment in <paramref name="file"/>, which the segment owns from now on;
     /// a sealed segment refuses any bad record instead of cutting it.
     /// </summary>
-    public static async ValueTask<Segment> OpenAsync(FileStream file, ulong firstIndex, bool isSealed, CancellationToken cancellationToken = default) {
+    public static async ValueTask<Segment> OpenAsync(IFile file, ulong firstIndex, bool isSealed, CancellationToken cancellationToken = default) {
         ArgumentOutOfRangeException.ThrowIfZero(firstIndex);
 
         var segment = new Segment(file, firstIndex, isSealed);
@@ -70,17 +74,22 @@ sealed class Segment : IDisposable {
     /// <summary>
     /// The index of the last entry, or <see cref="FirstIndex"/> - 1 when the segment is empty.
     /// </summary>
-    public ulong LastIndex => _count == 0 ? _firstIndex - 1 : _firstIndex + (ulong)_count - 1;
+    public ulong LastIndex {
+        get {
+            var count = Published.Count;
+            return count == 0 ? _firstIndex - 1 : _firstIndex + (ulong)count - 1;
+        }
+    }
 
     /// <summary>
     /// The number of bytes of the segment's records on disk.
     /// </summary>
-    public long Length => _length;
+    public long Length => Published.Length;
 
     /// <summary>
     /// The path of the segment file.
     /// </summary>
-    public string Path => _file.Name;
+    public string Path => _file.Path;
 
     /// <summary>
     /// Whether the segment is faulted and refuses everything.
@@ -88,21 +97,32 @@ sealed class Segment : IDisposable {
     public bool IsFaulted => _fault is not null;
 
     /// <summary>
+    /// The published state of the segment: what a reader beside the writer sees.
+    /// </summary>
+    SegmentState Published => Volatile.Read(ref _published);
+
+    /// <summary>
+    /// Publishes the working state, so that a reader beside the writer sees it whole.
+    /// </summary>
+    void Publish() =>
+        Volatile.Write(ref _published, new SegmentState(_locations, _count, _length));
+
+    /// <summary>
     /// The term of the entry at <paramref name="index"/>, from memory.
     /// </summary>
     public ulong GetTerm(ulong index) {
-        CheckIndex(index);
-        return _locations[(int)(index - _firstIndex)].Term;
+        var state = Published;
+        CheckIndex(index, state);
+        return state.Locations[(int)(index - _firstIndex)].Term;
     }
 
     /// <summary>
     /// The number of bytes the record of the entry at <paramref name="index"/> takes.
     /// </summary>
     public int GetRecordLength(ulong index) {
-        CheckIndex(index);
-        var i = (int)(index - _firstIndex);
-        var end = i + 1 < _count ? _locations[i + 1].Position : _length;
-        return (int)(end - _locations[i].Position);
+        var state = Published;
+        CheckIndex(index, state);
+        return RecordLength(state, (int)(index - _firstIndex));
     }
 
     /// <summary>
@@ -133,8 +153,8 @@ sealed class Segment : IDisposable {
 
             var lengthBeforeBatch = _length;
             try {
-                await _file.WriteAsync(buffer.AsMemory(0, (int)total)).ConfigureAwait(false);
-                _file.Flush(flushToDisk: true);
+                await _file.WriteAsync(buffer.AsMemory(0, (int)total), _length).ConfigureAwait(false);
+                _file.FlushToDisk();
             } catch (Exception writeException) {
                 CutTo(lengthBeforeBatch, writeException, "The segment could not cut back a failed write and refuses everything.");
                 throw;
@@ -150,6 +170,7 @@ sealed class Segment : IDisposable {
         }
 
         _length = position;
+        Publish();
     }
 
     /// <summary>
@@ -170,6 +191,7 @@ sealed class Segment : IDisposable {
         CutTo(position, null, "The segment could not truncate and refuses everything.");
         _count = (int)(index - _firstIndex);
         _length = position;
+        Publish();
     }
 
     /// <summary>
@@ -180,27 +202,98 @@ sealed class Segment : IDisposable {
         if (_fault is { } fault)
             throw fault;
 
-        CheckIndex(index);
+        var state = Published;
+        CheckIndex(index, state);
 
-        var recordLength = GetRecordLength(index);
+        var i = (int)(index - _firstIndex);
+        var recordLength = RecordLength(state, i);
         if (buffer.Length < recordLength)
             throw new ArgumentException($"The buffer must hold at least {recordLength} bytes.", nameof(buffer));
 
-        var location = _locations[(int)(index - _firstIndex)];
+        var location = state.Locations[i];
         var read = 0;
         while (read < recordLength) {
-            var readNow = await RandomAccess.ReadAsync(_file.SafeFileHandle, buffer.Slice(read, recordLength - read), location.Position + read, cancellationToken).ConfigureAwait(false);
+            var readNow = await _file.ReadAsync(buffer.Slice(read, recordLength - read), location.Position + read, cancellationToken).ConfigureAwait(false);
             if (readNow == 0)
-                throw new InvalidDataException($"The segment '{_file.Name}' ends before the record of entry {index} at position {location.Position}.");
+                throw new InvalidDataException($"The segment '{_file.Path}' ends before the record of entry {index} at position {location.Position}.");
 
             read += readNow;
         }
 
         var status = RecordFormat.TryRead(buffer.Span.Slice(0, recordLength), out var header, out var length);
         if (status != RecordStatus.Complete || length != recordLength || header.Index != index || header.Term != location.Term)
-            throw new InvalidDataException($"The record of entry {index} at position {location.Position} in the segment '{_file.Name}' is damaged.");
+            throw new InvalidDataException($"The record of entry {index} at position {location.Position} in the segment '{_file.Path}' is damaged.");
 
         return new Entry(header.Index, header.Term, header.Kind, header.Flags, buffer.Slice(RecordFormat.HeaderLength, header.PayloadLength));
+    }
+
+    /// <summary>
+    /// Reads the entries from <paramref name="firstIndex"/> up to at most
+    /// <paramref name="lastIndex"/>, as many whole records as fit in the buffer and
+    /// the entry array, with one read; the payloads point into the buffer. Every
+    /// record is checked as in the single read.
+    /// </summary>
+    /// <returns>The number of entries read; at least 1, the buffer must hold the first record.</returns>
+    public async ValueTask<int> ReadAsync(ulong firstIndex, ulong lastIndex, Memory<byte> buffer, Memory<Entry> entries, CancellationToken cancellationToken = default) {
+        if (_fault is { } fault)
+            throw fault;
+
+        var state = Published;
+        if (entries.Length == 0)
+            throw new ArgumentException("The entry array must hold at least one entry.", nameof(entries));
+        if (firstIndex < _firstIndex || firstIndex >= _firstIndex + (ulong)state.Count)
+            throw new ArgumentOutOfRangeException(nameof(firstIndex), firstIndex, $"The index must be within {_firstIndex} .. {LastIndex}.");
+        if (lastIndex < firstIndex)
+            throw new ArgumentOutOfRangeException(nameof(lastIndex), lastIndex, $"The last index must be at or above the first one ({firstIndex}).");
+
+        // The last entry this call may read: the given one, or the segment's last.
+        var last = Math.Min(lastIndex, _firstIndex + (ulong)state.Count - 1);
+        var locations = state.Locations;
+        var start = locations[firstIndex - _firstIndex].Position;
+
+        // The buffer must hold the first record.
+        var firstRecordLength = RecordLength(state, (int)(firstIndex - _firstIndex));
+        if (buffer.Length < firstRecordLength)
+            throw new ArgumentException($"The buffer must hold at least {firstRecordLength} bytes.", nameof(buffer));
+
+        // How many whole records fit in the buffer and the entry array.
+        var position = start;
+        var count = 0;
+        while (count < entries.Length && firstIndex + (ulong)count <= last) {
+            var recordLength = RecordLength(state, (int)(firstIndex + (ulong)count - _firstIndex));
+            if (position + recordLength > start + buffer.Length)
+                break;
+
+            position += recordLength;
+            count++;
+        }
+
+        // One read for the whole batch.
+        var total = (int)(position - start);
+        var read = 0;
+        while (read < total) {
+            var readNow = await _file.ReadAsync(buffer.Slice(read, total - read), start + read, cancellationToken).ConfigureAwait(false);
+            if (readNow == 0)
+                throw new InvalidDataException($"The segment '{_file.Path}' ends before the records of the entries {firstIndex} .. {firstIndex + (ulong)count - 1} at position {start}.");
+
+            read += readNow;
+        }
+
+        // Every record is checked as in the single read; the payloads point into the buffer.
+        var offset = 0;
+        for (var i = 0; i < count; i++) {
+            var index = firstIndex + (ulong)i;
+            var location = locations[index - _firstIndex];
+            var recordLength = RecordLength(state, (int)(index - _firstIndex));
+            var status = RecordFormat.TryRead(buffer.Span.Slice(offset, recordLength), out var header, out var length);
+            if (status != RecordStatus.Complete || length != recordLength || header.Index != index || header.Term != location.Term)
+                throw new InvalidDataException($"The record of entry {index} at position {location.Position} in the segment '{_file.Path}' is damaged.");
+
+            entries.Span[i] = new Entry(header.Index, header.Term, header.Kind, header.Flags, buffer.Slice(offset + RecordFormat.HeaderLength, header.PayloadLength));
+            offset += recordLength;
+        }
+
+        return count;
     }
 
     /// <inheritdoc/>
@@ -215,10 +308,8 @@ sealed class Segment : IDisposable {
     /// </summary>
     async ValueTask RecoverAsync(CancellationToken cancellationToken) {
         var fileLength = _file.Length;
-        if (fileLength == 0) {
-            _file.Position = _length;
+        if (fileLength == 0)
             return;
-        }
 
         var buffer = ArrayPool<byte>.Shared.Rent(RecoveryBufferSize);
         try {
@@ -278,7 +369,7 @@ sealed class Segment : IDisposable {
                 }
 
                 while (filled < buffer.Length && windowStart + filled < fileLength) {
-                    var read = await RandomAccess.ReadAsync(_file.SafeFileHandle, buffer.AsMemory(filled), windowStart + filled, cancellationToken).ConfigureAwait(false);
+                    var read = await _file.ReadAsync(buffer.AsMemory(filled), windowStart + filled, cancellationToken).ConfigureAwait(false);
                     if (read == 0)
                         break;
 
@@ -291,7 +382,7 @@ sealed class Segment : IDisposable {
                 // damage, refused without the search for a later write and without a
                 // cut.
                 if (_isSealed)
-                    throw new InvalidDataException($"The sealed segment '{_file.Name}' is damaged at position {position}: the record of entry {expectedIndex} is not complete.");
+                    throw new InvalidDataException($"The sealed segment '{_file.Path}' is damaged at position {position}: the record of entry {expectedIndex} is not complete.");
 
                 // Look behind the bad record for the first record of a later
                 // write: proof that the bad record was already on disk. That is
@@ -300,18 +391,17 @@ sealed class Segment : IDisposable {
                 buffer = bufferAfterSearch;
 
                 if (found)
-                    throw new InvalidDataException($"The segment '{_file.Name}' is damaged at position {position}: the record of entry {expectedIndex} is followed by the start of a later write.");
+                    throw new InvalidDataException($"The segment '{_file.Path}' is damaged at position {position}: the record of entry {expectedIndex} is followed by the start of a later write.");
 
                 // A torn tail: cut it off, with everything after it.
                 _file.SetLength(position);
-                _file.Position = position;
-                _file.Flush(flushToDisk: true);
+                _file.FlushToDisk();
             }
         } finally {
             ArrayPool<byte>.Shared.Return(buffer);
         }
 
-        _file.Position = _length;
+        Publish();
     }
 
     /// <summary>
@@ -373,7 +463,7 @@ sealed class Segment : IDisposable {
             }
 
             while (filled < buffer.Length && windowStart + filled < fileLength) {
-                var read = await RandomAccess.ReadAsync(_file.SafeFileHandle, buffer.AsMemory(filled), windowStart + filled, cancellationToken).ConfigureAwait(false);
+                var read = await _file.ReadAsync(buffer.AsMemory(filled), windowStart + filled, cancellationToken).ConfigureAwait(false);
                 if (read == 0)
                     break;
 
@@ -387,9 +477,19 @@ sealed class Segment : IDisposable {
     /// <summary>
     /// Throws when <paramref name="index"/> lies outside the entries of the segment.
     /// </summary>
-    void CheckIndex(ulong index) {
-        if (index < _firstIndex || index > LastIndex)
+    void CheckIndex(ulong index, SegmentState state) {
+        if (index < _firstIndex || index >= _firstIndex + (ulong)state.Count)
             throw new ArgumentOutOfRangeException(nameof(index), index, $"The index must be within {_firstIndex} .. {LastIndex}.");
+    }
+
+    /// <summary>
+    /// The number of bytes the record of the entry at <paramref name="i"/> in
+    /// <paramref name="state"/> takes: up to the next location, or the length of the
+    /// file for the last entry of the segment.
+    /// </summary>
+    static int RecordLength(SegmentState state, int i) {
+        var end = i + 1 < state.Count ? state.Locations[i + 1].Position : state.Length;
+        return (int)(end - state.Locations[i].Position);
     }
 
     /// <summary>
@@ -427,19 +527,17 @@ sealed class Segment : IDisposable {
     }
 
     /// <summary>
-    /// Cuts the file to <paramref name="position"/>, moves the write position there and
-    /// fsyncs the cut: without that fsync a crash right after could bring back bytes
-    /// that were meant to go, and recovery would take them as entries. When the cut
-    /// itself fails, the segment is faulted and refuses everything from now on: the
-    /// entries that should be gone may still be on disk and come back after a
-    /// restart. <paramref name="cause"/> is the failure the cut answers, when there is
-    /// one.
+    /// Cuts the file to <paramref name="position"/> and fsyncs the cut: without that
+    /// fsync a crash right after could bring back bytes that were meant to go, and
+    /// recovery would take them as entries. When the cut itself fails, the segment
+    /// is faulted and refuses everything from now on: the entries that should be
+    /// gone may still be on disk and come back after a restart.
+    /// <paramref name="cause"/> is the failure the cut answers, when there is one.
     /// </summary>
     void CutTo(long position, Exception? cause, string failure) {
         try {
             _file.SetLength(position);
-            _file.Position = position;
-            _file.Flush(flushToDisk: true);
+            _file.FlushToDisk();
         } catch (Exception cutException) {
             _fault = new IOException(failure, cause is null ? cutException : new AggregateException(cause, cutException));
             throw _fault;

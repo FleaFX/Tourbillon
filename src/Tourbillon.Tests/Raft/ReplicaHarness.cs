@@ -63,8 +63,8 @@ sealed class ReplicaHarness : IAsyncDisposable {
         return new ReplicaHarness(replica, inMemoryLog, voteStore, recording, time, name, members);
     }
 
-    public async Task LoadAsync() =>
-        await Replica.LoadAsync(TestContext.Current.CancellationToken);
+    public async Task LoadAsync(ulong applied = 0) =>
+        await Replica.LoadAsync(applied, TestContext.Current.CancellationToken);
 
     public async Task<bool> TurnAsync() =>
         await Replica.RunTurnAsync();

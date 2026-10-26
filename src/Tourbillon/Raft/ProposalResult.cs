@@ -39,6 +39,11 @@ enum RefusalReason : byte {
     /// Storage is full: own log or too few followers have room for the entry.
     /// </summary>
     StorageFull = 2,
+
+    /// <summary>
+    /// The write of the entry failed: it is in no log.
+    /// </summary>
+    WriteFailed = 3,
 }
 
 /// <summary>

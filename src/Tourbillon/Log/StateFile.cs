@@ -9,10 +9,11 @@ namespace Tourbillon.Log;
 static class StateFile {
     /// <summary>
     /// Writes <paramref name="content"/> as the file <paramref name="name"/> in
-    /// <paramref name="directory"/>: to a temp file, fsynced, renamed over the old one,
-    /// and the directory fsynced.
+    /// <paramref name="directory"/> through <paramref name="fileSystem"/>: to a temp
+    /// file, fsynced, renamed over the old one, and the directory fsynced.
     /// </summary>
     public static async ValueTask WriteAsync(
+        IFileSystem fileSystem,
         string directory,
         string name,
         ReadOnlyMemory<byte> content,
@@ -27,33 +28,46 @@ static class StateFile {
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(4, 4), Crc32C.ComputeHash(content.Span));
         content.Span.CopyTo(buffer.AsSpan(8));
 
-        // A leftover temp file of a crashed write is overwritten.
-        using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 0, FileOptions.Asynchronous)) {
-            await file.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
-            file.Flush(flushToDisk: true);
+        // A leftover temp file of a crashed write is overwritten: opening a file
+        // does not cut it, so the write starts by cutting it to zero.
+        using (var file = fileSystem.OpenFile(temp)) {
+            file.SetLength(0);
+            await file.WriteAsync(buffer, 0).ConfigureAwait(false);
+            file.FlushToDisk();
         }
 
         // The rename makes the new version appear in one step: after a crash the file
         // is the old version or the new one, never half of each.
-        File.Move(temp, path, overwrite: true);
-        DirectorySync.Flush(directory);
+        fileSystem.MoveFile(temp, path);
+        fileSystem.FlushDirectory(directory);
     }
 
     /// <summary>
-    /// Reads the file <paramref name="name"/> in <paramref name="directory"/>, or
-    /// <see langword="null"/> when it does not exist.
+    /// Reads the file <paramref name="name"/> in <paramref name="directory"/> through
+    /// <paramref name="fileSystem"/>, or <see langword="null"/> when it does not exist.
     /// </summary>
     /// <exception cref="InvalidDataException">The file is damaged.</exception>
     public static async ValueTask<byte[]?> ReadAsync(
+        IFileSystem fileSystem,
         string directory,
         string name,
         CancellationToken cancellationToken = default
     ) {
         var path = Path.Combine(directory, name);
-        if (!File.Exists(path))
+        if (!fileSystem.FileExists(path))
             return null;
 
-        var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        using var file = fileSystem.OpenFile(path);
+        var bytes = new byte[file.Length];
+        var read = 0;
+        while (read < bytes.Length) {
+            var readNow = await file.ReadAsync(bytes.AsMemory(read), read, cancellationToken).ConfigureAwait(false);
+            if (readNow == 0)
+                break;
+
+            read += readNow;
+        }
+
         if (bytes.Length < 8)
             throw new InvalidDataException($"The state file '{path}' is damaged: it holds less than a header.");
 

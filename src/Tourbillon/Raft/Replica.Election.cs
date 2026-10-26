@@ -252,7 +252,7 @@ partial class Replica {
         _quorumResponses.Clear();
         InvalidateHeartbeatTimer();
         InvalidateCheckQuorumTimer();
-        FailPendingProposals();
+        FailPendingProposals(ProposalResult.Refused(RefusalReason.NotLeader, _leader));
         ArmElectionTimer();
     }
 
