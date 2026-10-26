@@ -1,5 +1,7 @@
 using AwesomeAssertions;
 
+using Tourbillon.Raft;
+
 namespace Tourbillon.Log;
 
 public class SegmentedLogTests {
@@ -30,7 +32,7 @@ public class SegmentedLogTests {
     static StorageLimit UnlimitedStorage() => new(() => long.MaxValue, maximumSize: null, reserveSize: 0);
 
     static ValueTask<SegmentedLog> OpenLogAsync(TempDirectory directory, long segmentSize = SegmentSize, StorageLimit? storage = null) =>
-        SegmentedLog.OpenAsync(directory.Path, segmentSize, storage ?? UnlimitedStorage(), TestContext.Current.CancellationToken);
+        SegmentedLog.OpenAsync(DiskFileSystem.Instance, directory.Path, segmentSize, storage ?? UnlimitedStorage(), TestContext.Current.CancellationToken);
 
     static string SegmentName(ulong firstIndex) => $"{firstIndex:D20}.seg";
 
@@ -230,7 +232,7 @@ public class SegmentedLogTests {
                         flipped[positions[record] + offset] ^= 0xFF;
                         await File.WriteAllBytesAsync(file, flipped, TestContext.Current.CancellationToken);
 
-                        var open = async () => await SegmentedLog.OpenAsync(directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
+                        var open = async () => await SegmentedLog.OpenAsync(DiskFileSystem.Instance, directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
                         var exception = (await open.Should().ThrowExactlyAsync<InvalidDataException>()).Which;
                         exception.Message.Should().Contain(Path.GetFileName(file));
 
@@ -251,7 +253,7 @@ public class SegmentedLogTests {
 
             File.Delete(Path.Combine(directory.Path, SegmentName(21)));
 
-            var open = async () => await SegmentedLog.OpenAsync(directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
+            var open = async () => await SegmentedLog.OpenAsync(DiskFileSystem.Instance, directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
             var exception = (await open.Should().ThrowExactlyAsync<InvalidDataException>()).Which;
             exception.Message.Should().Contain("gap");
         }
@@ -266,7 +268,7 @@ public class SegmentedLogTests {
                 Path.Combine(directory.Path, SegmentName(41)),
                 Path.Combine(directory.Path, SegmentName(42)));
 
-            var open = async () => await SegmentedLog.OpenAsync(directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
+            var open = async () => await SegmentedLog.OpenAsync(DiskFileSystem.Instance, directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
             await open.Should().ThrowExactlyAsync<InvalidDataException>();
         }
 
@@ -281,7 +283,7 @@ public class SegmentedLogTests {
                 Path.Combine(directory.Path, SegmentName(41)),
                 Path.Combine(directory.Path, SegmentName(40)));
 
-            var open = async () => await SegmentedLog.OpenAsync(directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
+            var open = async () => await SegmentedLog.OpenAsync(DiskFileSystem.Instance, directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
             await open.Should().ThrowExactlyAsync<InvalidDataException>();
         }
 
@@ -297,7 +299,7 @@ public class SegmentedLogTests {
             var positions = RecordPositions(fileBytes);
             await File.WriteAllBytesAsync(first, fileBytes.AsMemory(0, (int)positions[^1]), TestContext.Current.CancellationToken);
 
-            var open = async () => await SegmentedLog.OpenAsync(directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
+            var open = async () => await SegmentedLog.OpenAsync(DiskFileSystem.Instance, directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
             var exception = (await open.Should().ThrowExactlyAsync<InvalidDataException>()).Which;
             exception.Message.Should().Contain("gap");
         }
@@ -309,7 +311,7 @@ public class SegmentedLogTests {
 
             await File.WriteAllBytesAsync(Path.Combine(directory.Path, "abc.seg"), new byte[] { 1, 2, 3 }, TestContext.Current.CancellationToken);
 
-            var open = async () => await SegmentedLog.OpenAsync(directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
+            var open = async () => await SegmentedLog.OpenAsync(DiskFileSystem.Instance, directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
             var exception = (await open.Should().ThrowExactlyAsync<InvalidDataException>()).Which;
             exception.Message.Should().Contain("abc.seg");
         }
@@ -319,7 +321,7 @@ public class SegmentedLogTests {
             using var directory = new TempDirectory();
             await File.WriteAllBytesAsync(Path.Combine(directory.Path, SegmentName(0)), [], TestContext.Current.CancellationToken);
 
-            var open = async () => await SegmentedLog.OpenAsync(directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
+            var open = async () => await SegmentedLog.OpenAsync(DiskFileSystem.Instance, directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
             var exception = (await open.Should().ThrowExactlyAsync<InvalidDataException>()).Which;
             exception.Message.Should().Contain(SegmentName(0));
         }
@@ -416,7 +418,7 @@ public class SegmentedLogTests {
             var wrong = Path.Combine(directory.Path, SegmentName(27));
             await File.WriteAllBytesAsync(wrong, Array.Empty<byte>(), TestContext.Current.CancellationToken);
 
-            var open = async () => await SegmentedLog.OpenAsync(directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
+            var open = async () => await SegmentedLog.OpenAsync(DiskFileSystem.Instance, directory.Path, SegmentSize, UnlimitedStorage(), TestContext.Current.CancellationToken);
             var exception = (await open.Should().ThrowExactlyAsync<InvalidDataException>()).Which;
             exception.Message.Should().Contain("gap");
         }
@@ -881,6 +883,243 @@ public class SegmentedLogTests {
             var second = new StorageLimit(() => long.MaxValue, maximumSize: null, reserveSize: 0);
             using (var log = await OpenLogAsync(directory, segmentSize: 1024 * 1024, storage: second))
                 second.Used.Should().Be(length);
+        }
+    }
+
+    public class RangeReadAsync {
+        [Fact]
+        public async Task Reads_a_range_in_one_batch() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory);
+            IRaftLog raftLog = log;
+
+            await raftLog.AppendAsync(MakeEntries(1, 10));
+
+            var buffer = new byte[10 * RecordFormat.GetLength(PayloadLength)];
+            var entries = new Entry[10];
+            var count = await raftLog.ReadAsync(3, 8, buffer, entries, TestContext.Current.CancellationToken);
+
+            count.Should().Be(6);
+            for (var i = 0; i < count; i++) {
+                var expected = MakeEntry(3 + (ulong)i);
+                entries[i].Index.Should().Be(expected.Index);
+                entries[i].Term.Should().Be(expected.Term);
+                entries[i].Kind.Should().Be(expected.Kind);
+                entries[i].Flags.Should().Be(expected.Flags);
+                entries[i].Payload.Span.SequenceEqual(expected.Payload.Span).Should().BeTrue();
+            }
+        }
+
+        [Fact]
+        public async Task The_payloads_point_into_the_buffer() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory);
+            IRaftLog raftLog = log;
+
+            await raftLog.AppendAsync(MakeEntries(1, 3));
+
+            var buffer = new byte[3 * RecordFormat.GetLength(PayloadLength)];
+            var entries = new Entry[3];
+            var count = await raftLog.ReadAsync(1, 3, buffer, entries, TestContext.Current.CancellationToken);
+            count.Should().Be(3);
+
+            // The batch is lent: filling the buffer overwrites the payloads.
+            Array.Fill(buffer, (byte)0xA5);
+            foreach (var entry in entries)
+                entry.Payload.ToArray().Should().OnlyContain(b => b == 0xA5);
+        }
+
+        [Fact]
+        public async Task A_last_index_beyond_the_log_reads_up_to_the_end() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory);
+            IRaftLog raftLog = log;
+
+            await raftLog.AppendAsync(MakeEntries(1, 10));
+
+            var buffer = new byte[10 * RecordFormat.GetLength(PayloadLength)];
+            var entries = new Entry[10];
+            var count = await raftLog.ReadAsync(8, 100, buffer, entries, TestContext.Current.CancellationToken);
+
+            count.Should().Be(3);
+            entries[0].Index.Should().Be(8UL);
+            entries[2].Index.Should().Be(10UL);
+        }
+
+        [Fact]
+        public async Task The_batch_ends_at_a_segment_boundary() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory, segmentSize: 1024);
+            IRaftLog raftLog = log;
+
+            // Batches of 5 entries of 207 bytes: every segment holds one batch.
+            for (var first = 1; first <= 15; first += 5)
+                await raftLog.AppendAsync(MakeEntries((ulong)first, 5));
+
+            SegmentFiles(directory).Select(Path.GetFileName).Should().Equal(
+                SegmentName(1), SegmentName(6), SegmentName(11));
+
+            var buffer = new byte[15 * RecordFormat.GetLength(PayloadLength)];
+            var entries = new Entry[15];
+            var delivered = 0UL;
+            var batches = 0;
+            while (delivered < 15) {
+                var count = await raftLog.ReadAsync(delivered + 1, 15, buffer, entries, TestContext.Current.CancellationToken);
+
+                // One call reads within one segment: five entries, no more.
+                count.Should().Be(5);
+                batches++;
+                for (var i = 0; i < count; i++)
+                    entries[i].Index.Should().Be(delivered + 1 + (ulong)i);
+
+                delivered += (ulong)count;
+            }
+
+            batches.Should().Be(3);
+        }
+
+        [Fact]
+        public async Task The_batch_stops_when_the_buffer_is_full() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory);
+            IRaftLog raftLog = log;
+
+            await raftLog.AppendAsync(MakeEntries(1, 10));
+
+            // The buffer holds three records (621 bytes), not four (828).
+            var buffer = new byte[3 * RecordFormat.GetLength(PayloadLength) + 1];
+            var entries = new Entry[10];
+
+            var count = await raftLog.ReadAsync(1, 10, buffer, entries, TestContext.Current.CancellationToken);
+            count.Should().Be(3);
+
+            // The next batch continues without a gap.
+            count = await raftLog.ReadAsync(4, 10, buffer, entries, TestContext.Current.CancellationToken);
+            count.Should().Be(3);
+            entries[0].Index.Should().Be(4UL);
+            entries[2].Index.Should().Be(6UL);
+        }
+
+        [Fact]
+        public async Task The_batch_stops_when_the_entry_array_is_full() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory);
+            IRaftLog raftLog = log;
+
+            await raftLog.AppendAsync(MakeEntries(1, 10));
+
+            var buffer = new byte[10 * RecordFormat.GetLength(PayloadLength)];
+            var entries = new Entry[4];
+            var count = await raftLog.ReadAsync(1, 10, buffer, entries, TestContext.Current.CancellationToken);
+
+            count.Should().Be(4);
+            entries[3].Index.Should().Be(4UL);
+        }
+
+        [Fact]
+        public async Task A_record_bigger_than_the_buffer_refuses() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory);
+            IRaftLog raftLog = log;
+
+            await raftLog.AppendAsync(MakeEntries(1, 2));
+            await raftLog.AppendAsync(new[] { MakeEntry(3, payloadLength: 1000) });
+
+            var buffer = new byte[RecordFormat.GetLength(PayloadLength)];
+            var entries = new Entry[2];
+            var read = async () => await raftLog.ReadAsync(3, 3, buffer, entries, TestContext.Current.CancellationToken);
+
+            await read.Should().ThrowExactlyAsync<ArgumentException>();
+        }
+
+        [Fact]
+        public async Task An_empty_entry_array_refuses() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory);
+            IRaftLog raftLog = log;
+
+            await raftLog.AppendAsync(MakeEntries(1, 2));
+
+            var read = async () => await raftLog.ReadAsync(1, 2, new byte[2 * RecordFormat.GetLength(PayloadLength)], Array.Empty<Entry>(), TestContext.Current.CancellationToken);
+
+            await read.Should().ThrowExactlyAsync<ArgumentException>();
+        }
+
+        [Fact]
+        public async Task A_first_index_outside_the_log_throws() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory, segmentSize: 1024);
+            IRaftLog raftLog = log;
+
+            // Batches of 5 entries of 207 bytes: two segments, 1-5 and 6-10.
+            for (var first = 1; first <= 10; first += 5)
+                await raftLog.AppendAsync(MakeEntries((ulong)first, 5));
+
+            var buffer = new byte[RecordFormat.GetLength(PayloadLength)];
+            var entries = new Entry[1];
+
+            var below = async () => await raftLog.ReadAsync(0, 1, buffer, entries, TestContext.Current.CancellationToken);
+            await below.Should().ThrowExactlyAsync<ArgumentOutOfRangeException>();
+
+            var above = async () => await raftLog.ReadAsync(11, 11, buffer, entries, TestContext.Current.CancellationToken);
+            await above.Should().ThrowExactlyAsync<ArgumentOutOfRangeException>();
+
+            // Below the first index after a prefix removal.
+            await log.RemoveUpToAsync(5);
+            log.FirstIndex.Should().Be(6UL);
+            var removed = async () => await raftLog.ReadAsync(3, 5, buffer, entries, TestContext.Current.CancellationToken);
+            await removed.Should().ThrowExactlyAsync<ArgumentOutOfRangeException>();
+        }
+
+        [Fact]
+        public async Task A_last_index_below_the_first_throws() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory);
+            IRaftLog raftLog = log;
+
+            await raftLog.AppendAsync(MakeEntries(1, 5));
+
+            var read = async () => await raftLog.ReadAsync(3, 2, new byte[5 * RecordFormat.GetLength(PayloadLength)], new Entry[5], TestContext.Current.CancellationToken);
+
+            await read.Should().ThrowExactlyAsync<ArgumentOutOfRangeException>();
+        }
+    }
+
+    public class AsRaftLog {
+        [Fact]
+        public async Task The_place_before_the_first_entry_has_term_zero() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory);
+            IRaftLog raftLog = log;
+
+            await raftLog.AppendAsync(MakeEntries(1, 5));
+
+            raftLog.GetTerm(0).Should().Be(0UL);
+            raftLog.GetTerm(1).Should().Be(1UL);
+        }
+
+        [Fact]
+        public async Task A_faulted_log_reports_itself_as_faulted() {
+            using var directory = new TempDirectory();
+            using var log = await OpenLogAsync(directory, segmentSize: 1024);
+            IRaftLog raftLog = log;
+
+            raftLog.IsFaulted.Should().BeFalse();
+
+            await raftLog.AppendAsync(MakeEntries(1, 5));
+
+            // A directory with the name of the next segment: the new file cannot be
+            // created, on every platform.
+            Directory.CreateDirectory(Path.Combine(directory.Path, SegmentName(6)));
+
+            var append = async () => await raftLog.AppendAsync(MakeEntries(6, 1));
+            await append.Should().ThrowAsync<Exception>();
+
+            raftLog.IsFaulted.Should().BeTrue();
+
+            // The faulted log refuses the range read too.
+            var read = async () => await raftLog.ReadAsync(1, 5, new byte[5 * RecordFormat.GetLength(PayloadLength)], new Entry[5], TestContext.Current.CancellationToken);
+            await read.Should().ThrowExactlyAsync<IOException>();
         }
     }
 }

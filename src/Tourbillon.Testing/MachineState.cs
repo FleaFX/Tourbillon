@@ -12,6 +12,7 @@ namespace Tourbillon.Testing;
 /// <param name="VotedFor">The copy it voted for in that term, or null.</param>
 /// <param name="CommitIndex">The highest index it knows is committed; 0 when it does not run.</param>
 /// <param name="Log">Its log: the entries 1..last, payloads copied.</param>
+/// <param name="Applied">What its user applied through the feed, in order, payloads copied.</param>
 sealed record MachineState(
     string Name,
     bool Running,
@@ -19,5 +20,6 @@ sealed record MachineState(
     ulong Term,
     string? VotedFor,
     ulong CommitIndex,
-    IReadOnlyList<Entry> Log
+    IReadOnlyList<Entry> Log,
+    IReadOnlyList<Entry> Applied
 );

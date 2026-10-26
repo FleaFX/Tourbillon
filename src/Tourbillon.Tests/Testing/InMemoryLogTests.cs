@@ -203,4 +203,93 @@ public class InMemoryLogTests {
         await log.AppendAsync(MakeEntries(1, firstIndex: 3));
         log.AppendCount.Should().Be(2);
     }
+
+    [Fact]
+    public async Task A_range_reads_contiguous_entries() {
+        var log = new InMemoryLog();
+        await log.AppendAsync(MakeEntries(5));
+
+        var buffer = new byte[5 * RecordFormat.GetLength(1)];
+        var entries = new Entry[5];
+        var count = await log.ReadAsync(2, 4, buffer, entries, TestContext.Current.CancellationToken);
+
+        count.Should().Be(3);
+        for (var i = 0; i < count; i++) {
+            entries[i].Index.Should().Be(2UL + (ulong)i);
+            entries[i].Term.Should().Be(1UL);
+            entries[i].Payload.ToArray().Should().Equal(new byte[] { (byte)(2 + i) });
+        }
+    }
+
+    [Fact]
+    public async Task The_range_read_points_the_payloads_into_the_buffer() {
+        var log = new InMemoryLog();
+        await log.AppendAsync(MakeEntries(3));
+
+        var buffer = new byte[3 * RecordFormat.GetLength(1)];
+        var entries = new Entry[3];
+        var count = await log.ReadAsync(1, 3, buffer, entries, TestContext.Current.CancellationToken);
+        count.Should().Be(3);
+
+        // The batch is lent: filling the buffer overwrites the payloads.
+        Array.Fill(buffer, (byte)0xA5);
+        foreach (var entry in entries)
+            entry.Payload.ToArray().Should().OnlyContain(b => b == 0xA5);
+    }
+
+    [Fact]
+    public async Task The_range_batch_stops_at_the_buffer_and_the_entry_array() {
+        var log = new InMemoryLog();
+        await log.AppendAsync(MakeEntries(5));
+
+        // The buffer holds two records, the entry array five.
+        var buffer = new byte[2 * RecordFormat.GetLength(1)];
+        var entries = new Entry[5];
+        var count = await log.ReadAsync(1, 5, buffer, entries, TestContext.Current.CancellationToken);
+        count.Should().Be(2);
+
+        // The entry array holds one, the buffer five.
+        buffer = new byte[5 * RecordFormat.GetLength(1)];
+        entries = new Entry[1];
+        count = await log.ReadAsync(3, 5, buffer, entries, TestContext.Current.CancellationToken);
+        count.Should().Be(1);
+        entries[0].Index.Should().Be(3UL);
+    }
+
+    [Fact]
+    public async Task The_range_read_throws_outside_the_log() {
+        var log = new InMemoryLog();
+        await log.AppendAsync(MakeEntries(5));
+
+        var buffer = new byte[5 * RecordFormat.GetLength(1)];
+        var entries = new Entry[5];
+
+        var below = () => log.ReadAsync(0, 1, buffer, entries, TestContext.Current.CancellationToken);
+        below.Should().Throw<ArgumentOutOfRangeException>();
+
+        var above = () => log.ReadAsync(6, 6, buffer, entries, TestContext.Current.CancellationToken);
+        above.Should().Throw<ArgumentOutOfRangeException>();
+
+        var lastBelowFirst = () => log.ReadAsync(3, 2, buffer, entries, TestContext.Current.CancellationToken);
+        lastBelowFirst.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public async Task The_range_read_refuses_an_empty_entry_array_and_a_short_buffer() {
+        var log = new InMemoryLog();
+        await log.AppendAsync(new[] { MakeEntry(1, payload: new byte[10]) });
+
+        var empty = () => log.ReadAsync(1, 1, new byte[RecordFormat.GetLength(10)], Array.Empty<Entry>(), TestContext.Current.CancellationToken);
+        empty.Should().Throw<ArgumentException>();
+
+        var shortBuffer = () => log.ReadAsync(1, 1, new byte[RecordFormat.GetLength(10) - 1], new Entry[1], TestContext.Current.CancellationToken);
+        shortBuffer.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void The_log_is_not_faulted() {
+        var log = new InMemoryLog();
+
+        log.IsFaulted.Should().BeFalse();
+    }
 }

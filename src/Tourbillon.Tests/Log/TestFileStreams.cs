@@ -1,53 +1,87 @@
 namespace Tourbillon.Log;
 
-// A file stream a segment can open its file with, whose flush to disk is held back
-// until the test opens the gate: the append must not complete before the fsync.
-sealed class GatedFlushFileStream(string path)
-    : FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, bufferSize: 0, FileOptions.Asynchronous) {
+// A file a segment can open its file with, whose flush to disk is held back until
+// the test opens the gate: the append must not complete before the fsync.
+sealed class GatedFlushFile : IFile {
+    readonly IFile _file;
+
+    public GatedFlushFile(string path) {
+        _file = DiskFile.Open(path);
+    }
+
+    public string Path => _file.Path;
+
+    public long Length => _file.Length;
+
     public TaskCompletionSource FlushStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public TaskCompletionSource FlushGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public override void Flush(bool flushToDisk) {
-        if (flushToDisk) {
-            FlushStarted.TrySetResult();
-            FlushGate.Task.GetAwaiter().GetResult();
-        }
+    public ValueTask WriteAsync(ReadOnlyMemory<byte> data, long position) =>
+        _file.WriteAsync(data, position);
 
-        base.Flush(flushToDisk);
+    public void FlushToDisk() {
+        FlushStarted.TrySetResult();
+        FlushGate.Task.GetAwaiter().GetResult();
+        _file.FlushToDisk();
     }
+
+    public void SetLength(long length) => _file.SetLength(length);
+
+    public ValueTask<int> ReadAsync(Memory<byte> buffer, long position, CancellationToken cancellationToken = default) =>
+        _file.ReadAsync(buffer, position, cancellationToken);
+
+    public void Dispose() => _file.Dispose();
 }
 
 // Counts the write calls and the flushes to disk, so a test can see that one batch
 // costs one write and one fsync.
-sealed class CountingFileStream(string path)
-    : FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, bufferSize: 0, FileOptions.Asynchronous) {
+sealed class CountingFile : IFile {
+    readonly IFile _file;
+
+    public CountingFile(string path) {
+        _file = DiskFile.Open(path);
+    }
+
+    public string Path => _file.Path;
+
+    public long Length => _file.Length;
+
     public int WriteCount { get; private set; }
 
     public int FlushToDiskCount { get; private set; }
 
-    public override void Write(ReadOnlySpan<byte> buffer) {
+    public ValueTask WriteAsync(ReadOnlyMemory<byte> data, long position) {
         WriteCount++;
-        base.Write(buffer);
+        return _file.WriteAsync(data, position);
     }
 
-    public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) {
-        WriteCount++;
-        return base.WriteAsync(buffer, cancellationToken);
+    public void FlushToDisk() {
+        FlushToDiskCount++;
+        _file.FlushToDisk();
     }
 
-    public override void Flush(bool flushToDisk) {
-        if (flushToDisk)
-            FlushToDiskCount++;
+    public void SetLength(long length) => _file.SetLength(length);
 
-        base.Flush(flushToDisk);
-    }
+    public ValueTask<int> ReadAsync(Memory<byte> buffer, long position, CancellationToken cancellationToken = default) =>
+        _file.ReadAsync(buffer, position, cancellationToken);
+
+    public void Dispose() => _file.Dispose();
 }
 
 // Fails the next write, the next flush to disk, the next truncate, or the flush after
 // a truncate, each on a switch of its own.
-sealed class FaultyFileStream(string path)
-    : FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, bufferSize: 0, FileOptions.Asynchronous) {
+sealed class FaultyFile : IFile {
+    readonly IFile _file;
+
+    public FaultyFile(string path) {
+        _file = DiskFile.Open(path);
+    }
+
+    public string Path => _file.Path;
+
+    public long Length => _file.Length;
+
     public bool FailNextWrite { get; set; }
 
     public bool FailNextFlushToDisk { get; set; }
@@ -58,39 +92,42 @@ sealed class FaultyFileStream(string path)
 
     bool _lengthChanged;
 
-    public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) {
+    public ValueTask WriteAsync(ReadOnlyMemory<byte> data, long position) {
         if (FailNextWrite) {
             FailNextWrite = false;
             throw new IOException("Simulated write failure.");
         }
 
-        return base.WriteAsync(buffer, cancellationToken);
+        return _file.WriteAsync(data, position);
     }
 
-    public override void SetLength(long value) {
+    public void SetLength(long length) {
         if (FailNextSetLength) {
             FailNextSetLength = false;
             throw new IOException("Simulated truncate failure.");
         }
 
-        base.SetLength(value);
+        _file.SetLength(length);
         _lengthChanged = true;
     }
 
-    public override void Flush(bool flushToDisk) {
-        if (flushToDisk) {
-            if (FailFlushAfterSetLength && _lengthChanged) {
-                FailFlushAfterSetLength = false;
-                _lengthChanged = false;
-                throw new IOException("Simulated flush failure after a truncate.");
-            }
-
-            if (FailNextFlushToDisk) {
-                FailNextFlushToDisk = false;
-                throw new IOException("Simulated flush failure.");
-            }
+    public void FlushToDisk() {
+        if (FailFlushAfterSetLength && _lengthChanged) {
+            FailFlushAfterSetLength = false;
+            _lengthChanged = false;
+            throw new IOException("Simulated flush failure after a truncate.");
         }
 
-        base.Flush(flushToDisk);
+        if (FailNextFlushToDisk) {
+            FailNextFlushToDisk = false;
+            throw new IOException("Simulated flush failure.");
+        }
+
+        _file.FlushToDisk();
     }
+
+    public ValueTask<int> ReadAsync(Memory<byte> buffer, long position, CancellationToken cancellationToken = default) =>
+        _file.ReadAsync(buffer, position, cancellationToken);
+
+    public void Dispose() => _file.Dispose();
 }

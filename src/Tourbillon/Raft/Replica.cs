@@ -6,7 +6,10 @@ namespace Tourbillon.Raft;
 /// One copy of a Raft group: a single-mailbox actor that owns all state of the copy.
 /// Callers may invoke the public API concurrently without locking — every operation is
 /// a message posted to the actor's mailbox, or a proposal in the actor's own queue, and
-/// one turn at a time processes them in arrival order.
+/// one turn at a time processes them in arrival order. An exception of the log, the
+/// vote store or anything else in a turn breaks the copy: it stops its timers, drops
+/// every message and refuses every proposal, and behaves as a crashed one for the
+/// group.
 /// </summary>
 sealed partial class Replica(
     string name,
@@ -45,10 +48,13 @@ sealed partial class Replica(
     ulong _commitIndex;
     string? _leader;
     bool _isReady;
+    Exception? _fault;
     DateTimeOffset _lastLeaderContact;
     bool _disposed;
     CancellationTokenSource? _cts;
     Task? _loop;
+    Feed? _feed;
+    TaskCompletionSource<bool>? _feedReader;
 
     /// <summary>
     /// The role of this copy: follower, candidate or leader.
@@ -68,7 +74,7 @@ sealed partial class Replica(
     /// <summary>
     /// The highest index this copy knows is committed.
     /// </summary>
-    public ulong CommitIndex => _commitIndex;
+    public ulong CommitIndex => Volatile.Read(ref _commitIndex);
 
     /// <summary>
     /// The copy this copy believes is the leader, or null during an election.
@@ -82,16 +88,37 @@ sealed partial class Replica(
     public bool IsReady => _isReady;
 
     /// <summary>
+    /// The exception that broke this copy, or null while it runs; a broken copy stops
+    /// its timers, drops every message and refuses every proposal.
+    /// </summary>
+    public Exception? Fault => Volatile.Read(ref _fault);
+
+    /// <summary>
+    /// The feed of the accepted entries of this copy: from the index after the one
+    /// the user named when it opened the group, in log order; null until the copy is
+    /// loaded.
+    /// </summary>
+    public Feed? Feed => _feed;
+
+    /// <summary>
+    /// Whether this copy has stopped; a stopped copy ends its feed.
+    /// </summary>
+    public bool Stopped => Volatile.Read(ref _disposed);
+
+    /// <summary>
     /// Proposes a payload to the group. The returned task completes with the outcome of
     /// the proposal: accepted once the entry is committed, refused when it is certain
     /// the entry is not written by this copy, unknown when this copy lost track of a
-    /// written entry.
+    /// written entry. A broken copy refuses at once.
     /// </summary>
     public ValueTask<ProposalResult> ProposeAsync(
         ReadOnlyMemory<byte> payload,
         bool mayUseReserve,
         CancellationToken cancellationToken = default
     ) {
+        if (_fault is not null)
+            return new ValueTask<ProposalResult>(ProposalResult.Refused(RefusalReason.WriteFailed));
+
         var proposal = new PendingProposal(payload.ToArray(), mayUseReserve);
 
         // Registered before the proposal is queued: the turn that ends it disposes the
@@ -118,10 +145,10 @@ sealed partial class Replica(
 
     /// <summary>
     /// Receives a vote request from a member of the group; a message from a name outside
-    /// the group is dropped.
+    /// the group, or any message of a broken copy, is dropped.
     /// </summary>
     public void Receive(string from, VoteRequest message) {
-        if (!_memberSet.Contains(from))
+        if (_fault is not null || !_memberSet.Contains(from))
             return;
 
         _mailbox.Writer.TryWrite(new ReceivedVoteRequest(from, message));
@@ -129,10 +156,10 @@ sealed partial class Replica(
 
     /// <summary>
     /// Receives a vote response from a member of the group; a message from a name
-    /// outside the group is dropped.
+    /// outside the group, or any message of a broken copy, is dropped.
     /// </summary>
     public void Receive(string from, VoteResponse message) {
-        if (!_memberSet.Contains(from))
+        if (_fault is not null || !_memberSet.Contains(from))
             return;
 
         _mailbox.Writer.TryWrite(new ReceivedVoteResponse(from, message));
@@ -140,11 +167,11 @@ sealed partial class Replica(
 
     /// <summary>
     /// Receives an append request from a member of the group; a message from a name
-    /// outside the group is dropped. The entries are copied: the memory of a message is
-    /// only valid during the call.
+    /// outside the group, or any message of a broken copy, is dropped. The entries are
+    /// copied: the memory of a message is only valid during the call.
     /// </summary>
     public void Receive(string from, AppendRequest message) {
-        if (!_memberSet.Contains(from))
+        if (_fault is not null || !_memberSet.Contains(from))
             return;
 
         var entries = new Entry[message.Entries.Length];
@@ -158,61 +185,83 @@ sealed partial class Replica(
 
     /// <summary>
     /// Receives an append response from a member of the group; a message from a name
-    /// outside the group is dropped.
+    /// outside the group, or any message of a broken copy, is dropped.
     /// </summary>
     public void Receive(string from, AppendResponse message) {
-        if (!_memberSet.Contains(from))
+        if (_fault is not null || !_memberSet.Contains(from))
             return;
 
         _mailbox.Writer.TryWrite(new ReceivedAppendResponse(from, message));
     }
 
     /// <summary>
-    /// Loads the term and vote, arms the election timer and starts the loop that runs one
-    /// turn per message.
+    /// Loads the term and vote, opens the feed at the index the user applied, arms the
+    /// election timer and starts the loop that runs one turn per message.
     /// </summary>
-    public async ValueTask StartAsync(CancellationToken cancellationToken = default) {
-        await LoadAsync(cancellationToken);
+    public async ValueTask StartAsync(ulong applied, CancellationToken cancellationToken = default) {
+        await LoadAsync(applied, cancellationToken);
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _loop = RunLoopAsync(_cts.Token);
     }
 
     /// <summary>
-    /// Loads the term and vote, starts with nothing committed and no leader heard, and
-    /// arms the election timer, without the loop; the simulation runs the turns.
+    /// Loads the term and vote, opens the feed at the index the user applied — the
+    /// entries above it are handed out, nothing at or below it is repeated — starts
+    /// with nothing committed and no leader heard, and arms the election timer,
+    /// without the loop; the simulation runs the turns.
     /// </summary>
-    public async ValueTask LoadAsync(CancellationToken cancellationToken = default) {
+    public async ValueTask LoadAsync(ulong applied, CancellationToken cancellationToken = default) {
+        if (applied > _log.LastIndex)
+            throw new ArgumentOutOfRangeException(nameof(applied), applied, $"The user applied up to index {applied}, past the last index {_log.LastIndex} of this log: an applied entry was committed, and a copy only applies what it has on disk, so the user's state is ahead of this log (lost or wrong files).");
+        if (applied + 1 < _log.FirstIndex)
+            throw new ArgumentOutOfRangeException(nameof(applied), applied, $"The user applied up to index {applied}, before the first index {_log.FirstIndex} of this log: the log let go of entries the user still needs.");
+
         var (term, votedFor) = await _votes.LoadAsync(cancellationToken);
         _term = term;
         _votedFor = votedFor;
         _role = ReplicaRole.Follower;
         _commitIndex = 0;
         _lastLeaderContact = default;
+        _feed = new Feed(this, _log, applied, _options.PoisonFeed);
         ArmElectionTimer();
     }
 
     /// <summary>
     /// Runs one turn: the messages in the mailbox, at most
-    /// <see cref="MaxMessagesPerTurn"/>, then the flush of the waiting proposals.
+    /// <see cref="MaxMessagesPerTurn"/>, then the flush of the waiting proposals. A
+    /// broken copy drops every message; an exception of the log, the vote store or
+    /// anything else breaks the copy.
     /// </summary>
     /// <returns>Whether the turn did any work.</returns>
     public async ValueTask<bool> RunTurnAsync() {
-        var handled = 0;
-        while (handled < MaxMessagesPerTurn && _mailbox.Reader.TryRead(out var message)) {
-            await HandleAsync(message);
-            handled++;
+        if (_fault is not null) {
+            while (_mailbox.Reader.TryRead(out _))
+                ;
+
+            return false;
         }
 
-        var flushed = await FlushAsync();
-        return handled > 0 || flushed;
+        try {
+            var handled = 0;
+            while (handled < MaxMessagesPerTurn && _mailbox.Reader.TryRead(out var message)) {
+                await HandleAsync(message);
+                handled++;
+            }
+
+            var flushed = await FlushAsync();
+            return handled > 0 || flushed;
+        } catch (Exception exception) {
+            Break(exception);
+            return true;
+        }
     }
 
     /// <inheritdoc/>
     public async ValueTask DisposeAsync() {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed))
             return;
 
-        _disposed = true;
+        Volatile.Write(ref _disposed, true);
         _cts?.Cancel();
         if (_loop is { } loop)
             await loop;
@@ -220,7 +269,8 @@ sealed partial class Replica(
         _heartbeatTimer?.Dispose();
         _checkQuorumTimer?.Dispose();
         _cts?.Dispose();
-        FailPendingProposals();
+        FailPendingProposals(ProposalResult.Refused(RefusalReason.NotLeader, _leader));
+        Volatile.Read(ref _feedReader)?.TrySetResult(false);
         _mailbox.Writer.TryComplete();
     }
 
@@ -274,10 +324,46 @@ sealed partial class Replica(
     }
 
     /// <summary>
-    /// Ends every pending proposal of a copy that stops or steps down: the waiting ones
-    /// (never written) are refused, and the written and the in-flight ones end unknown.
+    /// Breaks the copy: <see cref="Fault"/> holds the exception, every timer stops,
+    /// every message is dropped, and the pending proposals end — the waiting ones
+    /// refused, the written and the in-flight ones unknown. A broken copy behaves as
+    /// a crashed one for the group.
     /// </summary>
-    void FailPendingProposals() {
+    void Break(Exception fault) {
+        if (Volatile.Read(ref _fault) is null)
+            Volatile.Write(ref _fault, fault);
+        _electionTimer?.Dispose();
+        _heartbeatTimer?.Dispose();
+        _checkQuorumTimer?.Dispose();
+        _electionTimer = null;
+        _heartbeatTimer = null;
+        _checkQuorumTimer = null;
+        FailPendingProposals(ProposalResult.Refused(RefusalReason.WriteFailed));
+        // The feed throws the fault: a waiting reader is woken to see it.
+        Volatile.Read(ref _feedReader)?.TrySetResult(true);
+    }
+
+    /// <summary>
+    /// Registers the feed's waiting reader: the next commit, stop or fault completes
+    /// it. A reader that is not waiting costs a commit nothing.
+    /// </summary>
+    public void RegisterFeedReader(TaskCompletionSource<bool> reader) =>
+        Volatile.Write(ref _feedReader, reader);
+
+    /// <summary>
+    /// Withdraws the feed's waiting reader, when it is still the one registered.
+    /// </summary>
+    public void UnregisterFeedReader(TaskCompletionSource<bool> reader) {
+        if (Volatile.Read(ref _feedReader) == reader)
+            Volatile.Write(ref _feedReader, null);
+    }
+
+    /// <summary>
+    /// Ends every pending proposal of a copy that stops, steps down or breaks: the
+    /// waiting ones (never written) complete with <paramref name="refusal"/>, and the
+    /// written and the in-flight ones end unknown.
+    /// </summary>
+    void FailPendingProposals(ProposalResult refusal) {
         List<PendingProposal>? waiting = null;
         List<PendingProposal>? written = null;
         List<PendingProposal?>? appending = null;
@@ -298,7 +384,7 @@ sealed partial class Replica(
 
         if (waiting is not null)
             foreach (var proposal in waiting)
-                proposal.Complete(ProposalResult.Refused(RefusalReason.NotLeader, _leader));
+                proposal.Complete(refusal);
         if (written is not null)
             foreach (var proposal in written)
                 proposal.Complete(ProposalResult.Unknown);

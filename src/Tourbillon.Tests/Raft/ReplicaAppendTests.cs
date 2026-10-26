@@ -134,7 +134,7 @@ public class ReplicaAppendTests {
     }
 
     [Fact]
-    public async Task Replacing_a_committed_entry_throws() {
+    public async Task Replacing_a_committed_entry_breaks_the_copy() {
         var entries = new[] {
             new Entry(1, 1, EntryKind.Command, EntryFlags.None, new byte[] { 1 }),
             new Entry(2, 2, EntryKind.Command, EntryFlags.None, new byte[] { 2 }),
@@ -149,8 +149,10 @@ public class ReplicaAppendTests {
 
         var offered = new[] { new Entry(2, 3, EntryKind.Command, EntryFlags.None, new byte[] { 7 }) };
         h.Replica.Receive("machine-2", new AppendRequest(2, 1, 1, 2, offered));
-        var turn = async () => await h.TurnAsync();
-        await turn.Should().ThrowExactlyAsync<InvalidDataException>();
+        await h.TurnAsync();
+
+        h.Replica.Fault.Should().BeAssignableTo<InvalidDataException>();
+        h.Replica.Fault!.Message.Should().Contain("committed entry at index 2");
     }
 
     [Fact]

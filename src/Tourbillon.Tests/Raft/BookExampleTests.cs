@@ -9,7 +9,7 @@ public class BookExampleTests {
         // Machine 1 leads in term 4. Entry 800 is on the disks of machines 1 and 2: that
         // is 2 of 3, so it is accepted. Machine 3 has only up to entry 799. Machine 1
         // crashes.
-        await using var cluster = new SimulatedCluster(copies: 3, seed: 1, options: ClusterRuns.Reliable);
+        await using var cluster = await SimulatedCluster.CreateAsync(copies: 3, seed: 1, options: ClusterRuns.Reliable);
         await cluster.SeedAsync("machine-1", 4, "machine-1", ClusterRuns.Entries(800, 4));
         await cluster.SeedAsync("machine-2", 4, "machine-1", ClusterRuns.Entries(800, 4));
         await cluster.SeedAsync("machine-3", 4, "machine-1", ClusterRuns.Entries(799, 4));
@@ -279,7 +279,7 @@ public class BookExampleTests {
     // can win the first election. The NoOp of term 6 (entry 11) commits on machines 1
     // and 2; machine 3 is still at entry 8.
     static async Task<SimulatedCluster> StartWithMachineOneLeadingAsync(int seed) {
-        var cluster = new SimulatedCluster(copies: 3, seed: seed, options: ClusterRuns.Reliable);
+        var cluster = await SimulatedCluster.CreateAsync(copies: 3, seed: seed, options: ClusterRuns.Reliable);
         await cluster.SeedAsync("machine-1", 5, "machine-1", ClusterRuns.Entries(10, 5));
         await cluster.SeedAsync("machine-2", 5, "machine-1", ClusterRuns.Entries(9, 5));
         await cluster.SeedAsync("machine-3", 5, "machine-1", ClusterRuns.Entries(8, 5));

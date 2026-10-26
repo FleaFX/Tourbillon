@@ -11,27 +11,30 @@ namespace Tourbillon.Testing;
 /// proposal to be accepted.
 /// </summary>
 static class FaultRun {
+    const int Copies = 3;
+
     /// <summary>
     /// Runs one fault run and returns what it came to. Throws
     /// <see cref="InvariantViolationException"/> on a violation, with the seed and the
     /// step, and <see cref="InvalidOperationException"/> when the group does not recover.
     /// </summary>
     public static async Task<FaultRunSummary> RunAsync(int seed, FaultRunOptions options) {
-        await using var runner = new Runner(seed, options);
+        await using var cluster = await SimulatedCluster.CreateAsync(Copies, seed,
+            new SimulationOptions(options.DropChance, options.MinDelay, options.MaxDelay, options.AllowReorder, options.Disk));
+        await using var runner = new Runner(seed, options, cluster);
         return await runner.RunAsync();
     }
 
     /// <summary>
     /// One run: the cluster, the faults, the proposals, the checker, the trace.
     /// </summary>
-    sealed class Runner(int seed, FaultRunOptions options) : IAsyncDisposable {
-        const int Copies = 3;
+    sealed class Runner(int seed, FaultRunOptions options, SimulatedCluster cluster) : IAsyncDisposable {
         const int Steps = 300;
         const int SettleSteps = 500;
         const long Reserve = 64 * 1024;
         static readonly TimeSpan Step = TimeSpan.FromMilliseconds(20);
 
-        readonly SimulatedCluster _cluster = new(Copies, seed, new SimulationOptions(options.DropChance, options.MinDelay, options.MaxDelay, options.AllowReorder));
+        readonly SimulatedCluster _cluster = cluster;
         readonly Random _random = new(seed);
         readonly InvariantChecker _checker = new();
         readonly List<(Task<ProposalResult> Task, byte[] Payload)> _proposals = new();
@@ -52,13 +55,17 @@ static class FaultRun {
 
             var step = 0;
             for (; step < Steps; step++) {
-                var action = await DoActionAsync();
-                await _cluster.StepAsync(Step);
-                CollectOutcomes();
-                _trace.Append(action).Append(';');
-                TraceState();
-                RecordLeadersAndTerms();
-                await CheckAsync(step);
+                try {
+                    var action = await DoActionAsync();
+                    await _cluster.StepAsync(Step);
+                    CollectOutcomes();
+                    _trace.Append(action).Append(';');
+                    TraceState();
+                    RecordLeadersAndTerms();
+                    await CheckAsync();
+                } catch (InvariantViolationException ex) {
+                    throw new InvariantViolationException($"[seed {seed}, step {step}] {ex.Message}");
+                }
             }
 
             // Settle: heal the network, restart every crashed copy, free every storage.
@@ -71,11 +78,15 @@ static class FaultRun {
 
             // Run until every proposal has an outcome and the group has a ready leader.
             for (; step < Steps + SettleSteps; step++) {
-                await _cluster.StepAsync(Step);
-                CollectOutcomes();
-                TraceState();
-                RecordLeadersAndTerms();
-                await CheckAsync(step);
+                try {
+                    await _cluster.StepAsync(Step);
+                    CollectOutcomes();
+                    TraceState();
+                    RecordLeadersAndTerms();
+                    await CheckAsync();
+                } catch (InvariantViolationException ex) {
+                    throw new InvariantViolationException($"[seed {seed}, step {step}] {ex.Message}");
+                }
                 if (_proposals.Count == 0 && ReadyLeader() is not null)
                     break;
             }
@@ -85,11 +96,15 @@ static class FaultRun {
             var payload = NextPayload();
             var last = _cluster.Replica(leader).ProposeAsync(payload, mayUseReserve: false, CancellationToken.None).AsTask();
             for (var settle = 0; settle < SettleSteps && !last.IsCompleted; settle++) {
-                await _cluster.StepAsync(Step);
-                CollectOutcomes();
-                TraceState();
-                RecordLeadersAndTerms();
-                await CheckAsync(Steps + SettleSteps + settle);
+                try {
+                    await _cluster.StepAsync(Step);
+                    CollectOutcomes();
+                    TraceState();
+                    RecordLeadersAndTerms();
+                    await CheckAsync();
+                } catch (InvariantViolationException ex) {
+                    throw new InvariantViolationException($"[seed {seed}, step {Steps + SettleSteps + settle}] {ex.Message}");
+                }
             }
 
             if (!last.IsCompleted)
@@ -125,8 +140,16 @@ static class FaultRun {
                 }
                 case 2: {
                     var running = RunningMachines();
-                    if (running.Length > 0)
-                        await _cluster.CrashAsync(running[_random.Next(running.Length)]);
+                    if (running.Length > 0) {
+                        var machine = running[_random.Next(running.Length)];
+                        if (options.Disk && _random.Next(2) == 0) {
+                            // Crash during one of the next file operations of the copy.
+                            await _cluster.CrashDuringAsync(machine, 1 + _random.Next(20));
+                            return "crash during";
+                        }
+
+                        await _cluster.CrashAsync(machine);
+                    }
                     return "crash";
                 }
                 case 3: {
@@ -232,15 +255,10 @@ static class FaultRun {
                     _terms.Add(_cluster.Replica(machine).Term);
         }
 
-        // The invariants over the whole run so far; a violation carries the seed and the
-        // step.
-        async Task CheckAsync(int step) {
-            try {
-                _checker.Assert(await _cluster.SnapshotAsync());
-            } catch (InvariantViolationException ex) {
-                throw new InvariantViolationException($"[seed {seed}, step {step}] {ex.Message}");
-            }
-        }
+        // The invariants over the whole run so far: the checker's violations and the
+        // users' feed checks both land here.
+        async Task CheckAsync() =>
+            _checker.Assert(await _cluster.SnapshotAsync());
 
         string[] RunningMachines() =>
             _cluster.Machines.Where(_cluster.IsRunning).ToArray();

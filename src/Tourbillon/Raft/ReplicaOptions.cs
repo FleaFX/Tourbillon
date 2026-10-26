@@ -18,4 +18,11 @@ sealed record ReplicaOptions {
     /// The longest election timeout; 300 ms.
     /// </summary>
     public TimeSpan ElectionTimeoutMax { get; init; } = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>
+    /// Whether the feed poisons a batch it takes back: it fills the buffer with
+    /// rubbish and clears the entry array, so a user that keeps a batch instead of
+    /// copying it sees the difference. Off by default; the simulation turns it on.
+    /// </summary>
+    public bool PoisonFeed { get; init; }
 }

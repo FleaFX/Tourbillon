@@ -1,9 +1,8 @@
 namespace Tourbillon.Raft;
 
 /// <summary>
-/// The log of one copy, as the replica uses it; the members are those of
-/// <see cref="Log.SegmentedLog"/>, so that the segmented log takes this role in the
-/// next step without an adapter.
+/// The log of one copy, as the replica uses it: the segmented log on disk
+/// (<see cref="Log.SegmentedLog"/>) and, in tests, an in-memory log.
 /// </summary>
 interface IRaftLog {
     /// <summary>
@@ -15,6 +14,11 @@ interface IRaftLog {
     /// The index of the last entry in the log; 0 when the log is empty.
     /// </summary>
     ulong LastIndex { get; }
+
+    /// <summary>
+    /// Whether the log is faulted and refuses everything.
+    /// </summary>
+    bool IsFaulted { get; }
 
     /// <summary>
     /// The term of the entry at <paramref name="index"/>; 0 for the place before the
@@ -45,4 +49,12 @@ interface IRaftLog {
     /// payload of the returned entry points into it.
     /// </summary>
     ValueTask<Entry> ReadAsync(ulong index, Memory<byte> buffer, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the entries from <paramref name="firstIndex"/> up to at most
+    /// <paramref name="lastIndex"/>, as many whole records as fit in the buffer and the
+    /// entry array, with one read; the payloads point into the buffer.
+    /// </summary>
+    /// <returns>The number of entries read; at least 1, the buffer must hold the first record.</returns>
+    ValueTask<int> ReadAsync(ulong firstIndex, ulong lastIndex, Memory<byte> buffer, Memory<Entry> entries, CancellationToken cancellationToken = default);
 }

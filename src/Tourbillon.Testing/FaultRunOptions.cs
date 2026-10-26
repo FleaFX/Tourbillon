@@ -23,4 +23,11 @@ sealed record FaultRunOptions {
     /// Whether messages between one pair of copies may arrive out of order.
     /// </summary>
     public bool AllowReorder { get; init; } = true;
+
+    /// <summary>
+    /// Whether the copies run on a segmented log and vote store on a simulated file
+    /// system: a crash can then lose what was not flushed, during an operation or at
+    /// once.
+    /// </summary>
+    public bool Disk { get; init; }
 }
