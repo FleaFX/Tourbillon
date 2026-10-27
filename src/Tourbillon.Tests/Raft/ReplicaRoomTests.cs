@@ -16,13 +16,13 @@ public class ReplicaRoomTests {
         h.Replica.Receive("machine-2", new AppendResponse(h.Replica.Term, AppendResult.Full, 1, 0));
         await h.TurnAsync();
 
-        // machine-3 stores the entry: a majority has it, the proposal is accepted.
+        // machine-3 stores the entry: a majority has it, the proposal is committed.
         h.Replica.Receive("machine-3", new AppendResponse(h.Replica.Term, AppendResult.Stored, 2, 0));
         await h.TurnAsync();
 
-        var accepted = await first;
-        accepted.Status.Should().Be(ProposalStatus.Accepted);
-        accepted.Index.Should().Be(2UL);
+        var committed = await first;
+        committed.Status.Should().Be(ProposalStatus.Committed);
+        committed.Index.Should().Be(2UL);
 
         // One full follower leaves a majority with room: the group goes on.
         var second = h.Replica.ProposeAsync(new byte[] { 2 }, false, TestContext.Current.CancellationToken);
@@ -31,9 +31,9 @@ public class ReplicaRoomTests {
 
         h.StoreAt("machine-3", 3);
         await h.TurnAsync();
-        var acceptedSecond = await second;
-        acceptedSecond.Status.Should().Be(ProposalStatus.Accepted);
-        acceptedSecond.Index.Should().Be(3UL);
+        var committedSecond = await second;
+        committedSecond.Status.Should().Be(ProposalStatus.Committed);
+        committedSecond.Index.Should().Be(3UL);
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class ReplicaRoomTests {
     }
 
     [Fact]
-    public async Task When_room_returns_the_stuck_entry_is_stored_and_a_new_proposal_is_accepted() {
+    public async Task When_room_returns_the_stuck_entry_is_stored_and_a_new_proposal_is_committed() {
         await using var h = await ReplicaHarness.MakeAsync();
         await h.LoadAsync();
         await h.ElectReadyAsync();
@@ -90,18 +90,18 @@ public class ReplicaRoomTests {
         await h.TurnAsync();
 
         var stored = await stuck;
-        stored.Status.Should().Be(ProposalStatus.Accepted);
+        stored.Status.Should().Be(ProposalStatus.Committed);
         stored.Index.Should().Be(2UL);
 
-        // One follower free is a majority: a new proposal is accepted again.
+        // One follower free is a majority: a new proposal is committed again.
         var next = h.Replica.ProposeAsync(new byte[] { 2 }, false, TestContext.Current.CancellationToken);
         await h.TurnAsync();
         h.Log.LastIndex.Should().Be(3UL);
 
         h.StoreAt("machine-3", 3);
         await h.TurnAsync();
-        var accepted = await next;
-        accepted.Status.Should().Be(ProposalStatus.Accepted);
-        accepted.Index.Should().Be(3UL);
+        var committed = await next;
+        committed.Status.Should().Be(ProposalStatus.Committed);
+        committed.Index.Should().Be(3UL);
     }
 }

@@ -2,7 +2,7 @@ namespace Tourbillon;
 
 /// <summary>
 /// One entry of a log: its place, the term it was proposed in, its kind and flags, and
-/// the user's opaque payload.
+/// the application's opaque payload.
 /// </summary>
 readonly struct Entry(ulong index, ulong term, EntryKind kind, EntryFlags flags, ReadOnlyMemory<byte> payload) {
     /// <summary>
@@ -26,7 +26,7 @@ readonly struct Entry(ulong index, ulong term, EntryKind kind, EntryFlags flags,
     public EntryFlags Flags { get; } = flags;
 
     /// <summary>
-    /// The user's bytes; Tourbillon never reads them.
+    /// The application's bytes; Tourbillon never reads them.
     /// </summary>
     public ReadOnlyMemory<byte> Payload { get; } = payload;
 }

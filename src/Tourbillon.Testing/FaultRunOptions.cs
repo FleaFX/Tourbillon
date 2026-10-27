@@ -20,12 +20,12 @@ sealed record FaultRunOptions {
     public TimeSpan MaxDelay { get; init; } = TimeSpan.FromMilliseconds(40);
 
     /// <summary>
-    /// Whether messages between one pair of copies may arrive out of order.
+    /// Whether messages between one pair of replicas may arrive out of order.
     /// </summary>
     public bool AllowReorder { get; init; } = true;
 
     /// <summary>
-    /// Whether the copies run on a segmented log and vote store on a simulated file
+    /// Whether the replicas run on a segmented log and vote store on a simulated file
     /// system: a crash can then lose what was not flushed, during an operation or at
     /// once.
     /// </summary>

@@ -116,15 +116,15 @@ partial class Replica {
         // through this timer firing again, with a fresh random timeout.
         ArmElectionTimer();
 
-        // A one-copy group wins its trial on its own.
+        // A one-replica group wins its trial on its own.
         if (_preVotes.Count >= Quorum)
             await StartElectionAsync();
     }
 
     /// <summary>
-    /// Starts the real election of the trial's term: the term and the vote for this copy
+    /// Starts the real election of the trial's term: the term and the vote for this replica
     /// are stored before any request is sent, and a majority of the votes already
-    /// gathered (the own one) makes a one-copy group leader at once.
+    /// gathered (the own one) makes a one-replica group leader at once.
     /// </summary>
     async ValueTask StartElectionAsync() {
         _term++;
@@ -156,7 +156,7 @@ partial class Replica {
 
     /// <summary>
     /// Answers a vote request. A PreVote is granted when the asked term is above this
-    /// copy's, its log is not behind, this copy is not a leader and it heard no leader
+    /// replica's, its log is not behind, this replica is not a leader and it heard no leader
     /// within the minimum election timeout; it stores nothing and changes no timer. A
     /// real vote is granted as the paper says: one per term, for a log at least as
     /// complete, and stored before the answer is sent.
@@ -197,10 +197,10 @@ partial class Replica {
     }
 
     /// <summary>
-    /// Counts a vote response: a higher term makes this copy a follower of that term; a
+    /// Counts a vote response: a higher term makes this replica a follower of that term; a
     /// PreVote grant counts only for the trial of the next term, a real grant only in
     /// the election of the current term; a majority starts the election or makes this
-    /// copy the leader.
+    /// replica the leader.
     /// </summary>
     async ValueTask HandleVoteResponseAsync(ReceivedVoteResponse message) {
         var response = message.Message;
@@ -230,7 +230,7 @@ partial class Replica {
     }
 
     /// <summary>
-    /// Makes this copy a follower of <paramref name="term"/> with <paramref name="leader"/>
+    /// Makes this replica a follower of <paramref name="term"/> with <paramref name="leader"/>
     /// as its leader hint: a higher term is stored with the vote reset, the pending
     /// proposals end, and the election timer is armed.
     /// </summary>
@@ -257,14 +257,14 @@ partial class Replica {
     }
 
     /// <summary>
-    /// Whether this copy heard a valid append request within <paramref name="within"/>.
+    /// Whether this replica heard a valid append request within <paramref name="within"/>.
     /// </summary>
     bool HeardLeaderWithin(TimeSpan within) =>
         _lastLeaderContact != default && _timeProvider.GetUtcNow() - _lastLeaderContact < within;
 
     /// <summary>
     /// Whether a candidate's log, at (<paramref name="candidateLastTerm"/>,
-    /// <paramref name="candidateLastIndex"/>), is at least as complete as this copy's,
+    /// <paramref name="candidateLastIndex"/>), is at least as complete as this replica's,
     /// at (<paramref name="ownLastTerm"/>, <paramref name="ownLastIndex"/>).
     /// </summary>
     static bool IsAtLeastAsUpToDate(ulong candidateLastTerm, ulong candidateLastIndex, ulong ownLastTerm, ulong ownLastIndex) =>

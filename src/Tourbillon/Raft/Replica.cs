@@ -3,11 +3,11 @@ using System.Threading.Channels;
 namespace Tourbillon.Raft;
 
 /// <summary>
-/// One copy of a Raft group: a single-mailbox actor that owns all state of the copy.
+/// One replica of a Raft group: a single-mailbox actor that owns all state of the replica.
 /// Callers may invoke the public API concurrently without locking — every operation is
 /// a message posted to the actor's mailbox, or a proposal in the actor's own queue, and
 /// one turn at a time processes them in arrival order. An exception of the log, the
-/// vote store or anything else in a turn breaks the copy: it stops its timers, drops
+/// vote store or anything else in a turn breaks the replica: it stops its timers, drops
 /// every message and refuses every proposal, and behaves as a crashed one for the
 /// group.
 /// </summary>
@@ -57,59 +57,59 @@ sealed partial class Replica(
     TaskCompletionSource<bool>? _feedReader;
 
     /// <summary>
-    /// The role of this copy: follower, candidate or leader.
+    /// The role of this replica: follower, candidate or leader.
     /// </summary>
     public ReplicaRole Role => _role;
 
     /// <summary>
-    /// The current term of this copy.
+    /// The current term of this replica.
     /// </summary>
     public ulong Term => _term;
 
     /// <summary>
-    /// The copy this copy voted for in the current term, or null.
+    /// The replica this replica voted for in the current term, or null.
     /// </summary>
     public string? VotedFor => _votedFor;
 
     /// <summary>
-    /// The highest index this copy knows is committed.
+    /// The highest index this replica knows is committed.
     /// </summary>
     public ulong CommitIndex => Volatile.Read(ref _commitIndex);
 
     /// <summary>
-    /// The copy this copy believes is the leader, or null during an election.
+    /// The replica this replica believes is the leader, or null during an election.
     /// </summary>
     public string? Leader => _leader;
 
     /// <summary>
-    /// Whether this copy is the leader and the NoOp of its term is committed; only then
+    /// Whether this replica is the leader and the NoOp of its term is committed; only then
     /// may it write proposals.
     /// </summary>
     public bool IsReady => _isReady;
 
     /// <summary>
-    /// The exception that broke this copy, or null while it runs; a broken copy stops
+    /// The exception that broke this replica, or null while it runs; a broken replica stops
     /// its timers, drops every message and refuses every proposal.
     /// </summary>
     public Exception? Fault => Volatile.Read(ref _fault);
 
     /// <summary>
-    /// The feed of the accepted entries of this copy: from the index after the one
-    /// the user named when it opened the group, in log order; null until the copy is
+    /// The feed of the committed entries of this replica: from the index after the one
+    /// the application named when it opened the group, in log order; null until the replica is
     /// loaded.
     /// </summary>
     public Feed? Feed => _feed;
 
     /// <summary>
-    /// Whether this copy has stopped; a stopped copy ends its feed.
+    /// Whether this replica has stopped; a stopped replica ends its feed.
     /// </summary>
     public bool Stopped => Volatile.Read(ref _disposed);
 
     /// <summary>
     /// Proposes a payload to the group. The returned task completes with the outcome of
-    /// the proposal: accepted once the entry is committed, refused when it is certain
-    /// the entry is not written by this copy, unknown when this copy lost track of a
-    /// written entry. A broken copy refuses at once.
+    /// the proposal: committed once a majority has the entry on disk, refused when it is certain
+    /// the entry is not written by this replica, unknown when this replica lost track of a
+    /// written entry. A broken replica refuses at once.
     /// </summary>
     public ValueTask<ProposalResult> ProposeAsync(
         ReadOnlyMemory<byte> payload,
@@ -145,7 +145,7 @@ sealed partial class Replica(
 
     /// <summary>
     /// Receives a vote request from a member of the group; a message from a name outside
-    /// the group, or any message of a broken copy, is dropped.
+    /// the group, or any message of a broken replica, is dropped.
     /// </summary>
     public void Receive(string from, VoteRequest message) {
         if (_fault is not null || !_memberSet.Contains(from))
@@ -156,7 +156,7 @@ sealed partial class Replica(
 
     /// <summary>
     /// Receives a vote response from a member of the group; a message from a name
-    /// outside the group, or any message of a broken copy, is dropped.
+    /// outside the group, or any message of a broken replica, is dropped.
     /// </summary>
     public void Receive(string from, VoteResponse message) {
         if (_fault is not null || !_memberSet.Contains(from))
@@ -167,7 +167,7 @@ sealed partial class Replica(
 
     /// <summary>
     /// Receives an append request from a member of the group; a message from a name
-    /// outside the group, or any message of a broken copy, is dropped. The entries are
+    /// outside the group, or any message of a broken replica, is dropped. The entries are
     /// copied: the memory of a message is only valid during the call.
     /// </summary>
     public void Receive(string from, AppendRequest message) {
@@ -185,7 +185,7 @@ sealed partial class Replica(
 
     /// <summary>
     /// Receives an append response from a member of the group; a message from a name
-    /// outside the group, or any message of a broken copy, is dropped.
+    /// outside the group, or any message of a broken replica, is dropped.
     /// </summary>
     public void Receive(string from, AppendResponse message) {
         if (_fault is not null || !_memberSet.Contains(from))
@@ -195,7 +195,7 @@ sealed partial class Replica(
     }
 
     /// <summary>
-    /// Loads the term and vote, opens the feed at the index the user applied, arms the
+    /// Loads the term and vote, opens the feed at the index the application applied, arms the
     /// election timer and starts the loop that runs one turn per message.
     /// </summary>
     public async ValueTask StartAsync(ulong applied, CancellationToken cancellationToken = default) {
@@ -205,16 +205,16 @@ sealed partial class Replica(
     }
 
     /// <summary>
-    /// Loads the term and vote, opens the feed at the index the user applied — the
+    /// Loads the term and vote, opens the feed at the index the application applied — the
     /// entries above it are handed out, nothing at or below it is repeated — starts
     /// with nothing committed and no leader heard, and arms the election timer,
     /// without the loop; the simulation runs the turns.
     /// </summary>
     public async ValueTask LoadAsync(ulong applied, CancellationToken cancellationToken = default) {
         if (applied > _log.LastIndex)
-            throw new ArgumentOutOfRangeException(nameof(applied), applied, $"The user applied up to index {applied}, past the last index {_log.LastIndex} of this log: an applied entry was committed, and a copy only applies what it has on disk, so the user's state is ahead of this log (lost or wrong files).");
+            throw new ArgumentOutOfRangeException(nameof(applied), applied, $"The application applied up to index {applied}, past the last index {_log.LastIndex} of this log: an applied entry was committed, and a replica only applies what it has on disk, so the application's state is ahead of this log (lost or wrong files).");
         if (applied + 1 < _log.FirstIndex)
-            throw new ArgumentOutOfRangeException(nameof(applied), applied, $"The user applied up to index {applied}, before the first index {_log.FirstIndex} of this log: the log let go of entries the user still needs.");
+            throw new ArgumentOutOfRangeException(nameof(applied), applied, $"The application applied up to index {applied}, before the first index {_log.FirstIndex} of this log: the log let go of entries the application still needs.");
 
         var (term, votedFor) = await _votes.LoadAsync(cancellationToken);
         _term = term;
@@ -229,8 +229,8 @@ sealed partial class Replica(
     /// <summary>
     /// Runs one turn: the messages in the mailbox, at most
     /// <see cref="MaxMessagesPerTurn"/>, then the flush of the waiting proposals. A
-    /// broken copy drops every message; an exception of the log, the vote store or
-    /// anything else breaks the copy.
+    /// broken replica drops every message; an exception of the log, the vote store or
+    /// anything else breaks the replica.
     /// </summary>
     /// <returns>Whether the turn did any work.</returns>
     public async ValueTask<bool> RunTurnAsync() {
@@ -275,7 +275,7 @@ sealed partial class Replica(
     }
 
     /// <summary>
-    /// The number of votes that makes a majority, this copy included.
+    /// The number of votes that makes a majority, this replica included.
     /// </summary>
     int Quorum => _members.Count / 2 + 1;
 
@@ -324,9 +324,9 @@ sealed partial class Replica(
     }
 
     /// <summary>
-    /// Breaks the copy: <see cref="Fault"/> holds the exception, every timer stops,
+    /// Breaks the replica: <see cref="Fault"/> holds the exception, every timer stops,
     /// every message is dropped, and the pending proposals end — the waiting ones
-    /// refused, the written and the in-flight ones unknown. A broken copy behaves as
+    /// refused, the written and the in-flight ones unknown. A broken replica behaves as
     /// a crashed one for the group.
     /// </summary>
     void Break(Exception fault) {
@@ -359,7 +359,7 @@ sealed partial class Replica(
     }
 
     /// <summary>
-    /// Ends every pending proposal of a copy that stops, steps down or breaks: the
+    /// Ends every pending proposal of a replica that stops, steps down or breaks: the
     /// waiting ones (never written) complete with <paramref name="refusal"/>, and the
     /// written and the in-flight ones end unknown.
     /// </summary>

@@ -12,19 +12,16 @@
   <p class="kicker">Tourbillon</p>
   <h1>Architecture</h1>
 
-  <div class="summary">
-    <strong>Read this first</strong>
-    <p>This book explains how Tourbillon works and why, in plain language. Read the chapters in order: each one builds on the words and ideas of the ones before. The book always describes the current design.</p>
-  </div>
+  <p>This book explains how Tourbillon works and why, in plain language, with the choices I made along the way and the measurements behind them. The chapters build on each other, so read them in order. The book describes the current design; when the design changes, the book changes first.</p>
 
   <h2>Chapters</h2>
   <ol class="contents">
-    <li><a href="01-what-is-tourbillon.html">What is Tourbillon</a><span>The problem it solves, what it does, and what it is not.</span></li>
-    <li><a href="02-the-log-on-one-machine.html">The log on one machine</a><span>Entries and segments, when an entry counts as accepted, what happens after a crash, and when the disk is full.</span></li>
-    <li><a href="03-the-users-state.html">The user's state</a><span>How the program that uses Tourbillon gets the accepted entries, snapshots, and who decides when entries may go.</span></li>
-    <li><a href="04-several-machines.html">Several machines</a><span>Groups, copies, the leader, the majority, and what happens when a machine fails.</span></li>
-    <li><a href="05-changing-the-copies.html">Changing the copies</a><span>Adding and removing a copy, letting a new copy catch up, and handing over leadership.</span></li>
-    <li><a href="06-hosting-and-api.html">Hosting and API</a><span>Many groups in one process, the network through the host, settings, measurements, and the test package.</span></li>
+    <li><a href="01-what-is-tourbillon.html">What is Tourbillon</a><span>The problem it solves, what it takes from Raft and what it adds, and what it is not.</span></li>
+    <li><a href="02-the-log-on-one-machine.html">The log on one machine</a><span>Segments, fsync and group commit, recovery after a crash, and a full disk.</span></li>
+    <li><a href="03-state-and-snapshots.html">State and snapshots</a><span>How the application gets the committed entries, keeps its own state, and lets go of the start of the log.</span></li>
+    <li><a href="04-several-machines.html">Several machines</a><span>The core of Raft: groups, the leader and the majority, elections, and the three outcomes of a proposal.</span></li>
+    <li><a href="05-changing-the-replicas.html">Changing the replicas</a><span>Membership changes one replica at a time, learners, leadership transfer, and PreVote.</span></li>
+    <li><a href="06-hosting-and-api.html">Hosting and API</a><span>Many groups in one process, the network through the host, the lent feed, settings, measurements, and the test package.</span></li>
   </ol>
 </article>
 <nav class="pages">

@@ -1,7 +1,7 @@
 namespace Tourbillon.Raft;
 
 /// <summary>
-/// The network as one copy of one group sees it. Sending never waits and may lose the
+/// The network as one replica of one group sees it. Sending never waits and may lose the
 /// message; the transport copies what it keeps, the memory of a message is only valid
 /// during the call.
 /// </summary>

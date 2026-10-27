@@ -24,7 +24,7 @@ public class ReplicaProposalTests {
     }
 
     [Fact]
-    public async Task A_proposal_on_a_one_copy_group_is_accepted_once_committed() {
+    public async Task A_proposal_on_a_one_replica_group_is_committed() {
         await using var h = await ReplicaHarness.MakeAsync(members: new[] { "machine-1" });
         await h.LoadAsync();
 
@@ -38,7 +38,7 @@ public class ReplicaProposalTests {
         await h.TurnAsync();
 
         var result = await proposal;
-        result.Status.Should().Be(ProposalStatus.Accepted);
+        result.Status.Should().Be(ProposalStatus.Committed);
         result.Index.Should().Be(2UL);
     }
 

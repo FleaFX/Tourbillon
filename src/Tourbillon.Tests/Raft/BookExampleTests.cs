@@ -7,9 +7,9 @@ public class BookExampleTests {
     [Fact]
     public async Task Chapter_4_the_election() {
         // Machine 1 leads in term 4. Entry 800 is on the disks of machines 1 and 2: that
-        // is 2 of 3, so it is accepted. Machine 3 has only up to entry 799. Machine 1
+        // is 2 of 3, so it is committed. Machine 3 has only up to entry 799. Machine 1
         // crashes.
-        await using var cluster = await SimulatedCluster.CreateAsync(copies: 3, seed: 1, options: ClusterRuns.Reliable);
+        await using var cluster = await SimulatedCluster.CreateAsync(replicas: 3, seed: 1, options: ClusterRuns.Reliable);
         await cluster.SeedAsync("machine-1", 4, "machine-1", ClusterRuns.Entries(800, 4));
         await cluster.SeedAsync("machine-2", 4, "machine-1", ClusterRuns.Entries(800, 4));
         await cluster.SeedAsync("machine-3", 4, "machine-1", ClusterRuns.Entries(799, 4));
@@ -87,7 +87,7 @@ public class BookExampleTests {
 
         // Machines 2 and 3 choose machine 2 as leader. Machine 2 takes a new proposal,
         // and that one becomes the entry at index 13 in the logs of machines 2 and 3:
-        // accepted.
+        // committed.
         var elected = await ClusterRuns.UntilAsync(cluster, () => ClusterRuns.Leader(cluster) == "machine-2");
         elected.Should().BeTrue();
         cluster.Replica("machine-2").Term.Should().Be(7UL);
@@ -96,10 +96,10 @@ public class BookExampleTests {
         var second = cluster.Replica("machine-2").ProposeAsync(new byte[] { 43 }, false, TestContext.Current.CancellationToken);
         var committed = await ClusterRuns.UntilAsync(cluster, () => second.IsCompleted);
         committed.Should().BeTrue();
-        (await second).Should().Be(ProposalResult.Accepted(13));
+        (await second).Should().Be(ProposalResult.Committed(13));
 
         // Machine 1 comes back. The leader sees that its entry at index 12 differs, and
-        // replaces it with the accepted entry.
+        // replaces it with the committed entry.
         cluster.Network.Heal();
         var caughtUp = await ClusterRuns.UntilAsync(cluster, () =>
             cluster.Log("machine-1").LastIndex >= 13 && cluster.Replica("machine-1").CommitIndex >= 13);
@@ -112,7 +112,7 @@ public class BookExampleTests {
     }
 
     [Fact]
-    public async Task Chapter_4_entry_801_accepted_after_a_timeout() {
+    public async Task Chapter_4_entry_801_committed_after_a_timeout() {
         // The book's entry 801 is index 12 here.
         await using var cluster = await StartWithMachineOneLeadingAsync(seed: 3);
         cluster.Network.Heal();
@@ -128,7 +128,7 @@ public class BookExampleTests {
         var stored = await ClusterRuns.UntilAsync(cluster, () => cluster.Log("machine-2").LastIndex >= 12);
         stored.Should().BeTrue("machine 2 stores the entry");
 
-        // Machine 1 is cut off completely: it steps down, and the user that proposed the
+        // Machine 1 is cut off completely: it steps down, and the application that proposed the
         // entry gets no answer — a timeout.
         cluster.Network.Cut("machine-1", "machine-2");
         var ended = await ClusterRuns.UntilAsync(cluster, () => proposal.IsCompleted);
@@ -136,7 +136,7 @@ public class BookExampleTests {
         (await proposal).Status.Should().Be(ProposalStatus.Unknown);
 
         // Machines 2 and 3 choose machine 2 as leader. Its log has the entry, so that
-        // entry stays, and becomes accepted after all: the NoOp of term 7 commits it.
+        // entry stays, and becomes committed after all: the NoOp of term 7 commits it.
         var elected = await ClusterRuns.UntilAsync(cluster, () => ClusterRuns.Leader(cluster) == "machine-2");
         elected.Should().BeTrue();
         cluster.Replica("machine-2").Term.Should().Be(7UL);
@@ -144,17 +144,17 @@ public class BookExampleTests {
         committed.Should().BeTrue("the NoOp of term 7 commits the entry of term 6 before it");
 
         // Machine 1 comes back: the entry stays in its log, and is committed on every
-        // copy.
+        // replica.
         cluster.Network.Heal();
         var everywhere = await ClusterRuns.UntilAsync(cluster, () =>
             cluster.Machines.All(machine => cluster.Replica(machine).CommitIndex >= 12));
-        everywhere.Should().BeTrue("the entry is committed on every copy");
+        everywhere.Should().BeTrue("the entry is committed on every replica");
         foreach (var machine in cluster.Machines)
             (await PayloadAsync(cluster, machine, 12)).Should().Equal(new byte[] { 42 });
     }
 
     [Fact]
-    public async Task Chapter_4_when_a_copy_is_full() {
+    public async Task Chapter_4_when_a_replica_is_full() {
         await using var cluster = await StartWithMachineOneLeadingAsync(seed: 4);
         cluster.Network.Heal();
         var caughtUp = await ClusterRuns.UntilAsync(cluster, () =>
@@ -163,13 +163,13 @@ public class BookExampleTests {
 
         // Step 1: the disk of machine 3 is full — 27 bytes over its reserve of 64 KiB,
         // so one unflagged record of a 10-byte payload (37 bytes) does not fit. Machines
-        // 1 (the leader) and 2 still have room: the entry is accepted, as if machine 3
+        // 1 (the leader) and 2 still have room: the entry is committed, as if machine 3
         // were down.
         cluster.SetFreeSpace("machine-3", 64 * 1024 + 27);
         var first = cluster.Replica("machine-1").ProposeAsync(Payload(1), false, TestContext.Current.CancellationToken);
-        var accepted = await ClusterRuns.UntilAsync(cluster, () => first.IsCompleted);
-        accepted.Should().BeTrue();
-        (await first).Should().Be(ProposalResult.Accepted(12));
+        var committed = await ClusterRuns.UntilAsync(cluster, () => first.IsCompleted);
+        committed.Should().BeTrue();
+        (await first).Should().Be(ProposalResult.Committed(12));
 
         // Step 2: machine 2 is full too — only the leader has room, 1 of 3. The leader
         // writes the next entry, and learns from the answers "full" that no majority has
@@ -201,12 +201,12 @@ public class BookExampleTests {
         await cluster.StepAsync(TimeSpan.FromMilliseconds(200));
         flagged.IsCompleted.Should().BeFalse("the full followers cannot take it yet");
 
-        // Room comes back on machine 3: the stuck entries are stored, and accepted.
+        // Room comes back on machine 3: the stuck entries are stored, and committed.
         cluster.SetFreeSpace("machine-3", long.MaxValue);
         var recovered = await ClusterRuns.UntilAsync(cluster, () => stuck.IsCompleted && flagged.IsCompleted);
         recovered.Should().BeTrue();
-        (await stuck).Should().Be(ProposalResult.Accepted(13));
-        (await flagged).Should().Be(ProposalResult.Accepted(14));
+        (await stuck).Should().Be(ProposalResult.Committed(13));
+        (await flagged).Should().Be(ProposalResult.Committed(14));
         (await PayloadAsync(cluster, "machine-3", 13)).Should().Equal(Payload(2));
         (await PayloadAsync(cluster, "machine-3", 14)).Should().Equal(Payload(4));
         var committedEverywhere = await ClusterRuns.UntilAsync(cluster, () =>
@@ -229,7 +229,7 @@ public class BookExampleTests {
         cluster.Network.Partition(["machine-1", "machine-2"], ["machine-3"]);
         await cluster.StepAsync(TimeSpan.FromSeconds(60));
 
-        cluster.Replica("machine-3").Term.Should().Be(6UL, "an isolated copy never raises its term: its trials find no answer");
+        cluster.Replica("machine-3").Term.Should().Be(6UL, "an isolated replica never raises its term: its trials find no answer");
         cluster.Replica("machine-1").Role.Should().Be(ReplicaRole.Leader, "machine 1 still hears machine 2");
 
         // The network comes back — staged, so that machine 3 times out and asks before it
@@ -279,7 +279,7 @@ public class BookExampleTests {
     // can win the first election. The NoOp of term 6 (entry 11) commits on machines 1
     // and 2; machine 3 is still at entry 8.
     static async Task<SimulatedCluster> StartWithMachineOneLeadingAsync(int seed) {
-        var cluster = await SimulatedCluster.CreateAsync(copies: 3, seed: seed, options: ClusterRuns.Reliable);
+        var cluster = await SimulatedCluster.CreateAsync(replicas: 3, seed: seed, options: ClusterRuns.Reliable);
         await cluster.SeedAsync("machine-1", 5, "machine-1", ClusterRuns.Entries(10, 5));
         await cluster.SeedAsync("machine-2", 5, "machine-1", ClusterRuns.Entries(9, 5));
         await cluster.SeedAsync("machine-3", 5, "machine-1", ClusterRuns.Entries(8, 5));
@@ -295,7 +295,7 @@ public class BookExampleTests {
         return cluster;
     }
 
-    // The payload of one entry of one copy's log.
+    // The payload of one entry of one replica's log.
     static async Task<byte[]> PayloadAsync(SimulatedCluster cluster, string machine, ulong index) {
         var log = cluster.Log(machine);
         var buffer = new byte[log.GetRecordLength(index)];
@@ -303,7 +303,7 @@ public class BookExampleTests {
         return entry.Payload.ToArray();
     }
 
-    // A 10-byte payload: its record is 37 bytes, one over the 27 a full copy still has
+    // A 10-byte payload: its record is 37 bytes, one over the 27 a full replica still has
     // outside its reserve.
     static byte[] Payload(byte fill) =>
         Enumerable.Repeat(fill, 10).ToArray();

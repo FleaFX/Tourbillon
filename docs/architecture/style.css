@@ -25,7 +25,7 @@ main {
   padding: 3rem 1rem 5rem;
 }
 
-h1, h2, h3, .kicker, .summary, .sample, figcaption, dt, nav {
+h1, h2, h3, .kicker, .sample, figcaption, dt, nav {
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
@@ -48,17 +48,6 @@ h2 { margin: 2.5rem 0 0.75rem; font-size: 1.35rem; }
   background: var(--warn-soft);
   font-size: 0.85rem;
 }
-
-.summary {
-  margin: 1.5rem 0 2rem;
-  padding: 1rem 1.25rem;
-  border-left: 4px solid var(--accent);
-  background: var(--accent-soft);
-  font-size: 1rem;
-}
-
-.summary strong { display: block; margin-bottom: 0.3rem; }
-.summary p { margin: 0; }
 
 .promises {
   margin: 2rem 0;
@@ -127,6 +116,6 @@ dl.glossary dd { margin: 0.1rem 0 0 0; }
   nav.pages { display: none; }
   main { max-width: none; padding: 0; }
   article + article { break-before: page; }
-  h2, figure, .summary { break-inside: avoid; }
+  h2, figure { break-inside: avoid; }
   h2 { break-after: avoid; }
 }

@@ -20,7 +20,7 @@ public class FaultRunTests {
     public async Task A_fault_run_never_violates_an_invariant(int seed) {
         var summary = await FaultRun.RunAsync(seed, new FaultRunOptions());
 
-        summary.Accepted.Should().BeGreaterThan(0, "the run proposes, and recovers at the end");
+        summary.Committed.Should().BeGreaterThan(0, "the run proposes, and recovers at the end");
     }
 
     [Theory]
@@ -28,7 +28,7 @@ public class FaultRunTests {
     public async Task A_fault_run_on_the_log_on_disk_never_violates_an_invariant(int seed) {
         var summary = await FaultRun.RunAsync(seed, new FaultRunOptions { Disk = true });
 
-        summary.Accepted.Should().BeGreaterThan(0, "the run proposes, and recovers at the end");
+        summary.Committed.Should().BeGreaterThan(0, "the run proposes, and recovers at the end");
     }
 
     [Fact]

@@ -5,29 +5,29 @@ namespace Tourbillon.Raft;
 
 public class SimulatedClusterTests {
     [Fact]
-    public async Task Three_copies_elect_exactly_one_leader() {
-        await using var cluster = await SimulatedCluster.CreateAsync(copies: 3, seed: 1, ClusterRuns.Reliable);
+    public async Task Three_replicas_elect_exactly_one_leader() {
+        await using var cluster = await SimulatedCluster.CreateAsync(replicas: 3, seed: 1, ClusterRuns.Reliable);
         await cluster.StartAsync();
 
         var elected = await ClusterRuns.UntilAsync(cluster, () => ClusterRuns.Leader(cluster) is not null);
 
-        elected.Should().BeTrue("a 3-copy cluster with a reliable network must elect a leader");
+        elected.Should().BeTrue("a 3-replica cluster with a reliable network must elect a leader");
         cluster.Machines.Count(machine => cluster.Replica(machine).Role == ReplicaRole.Leader).Should().Be(1);
     }
 
     [Fact]
-    public async Task A_proposal_is_committed_on_every_copy() {
-        await using var cluster = await SimulatedCluster.CreateAsync(copies: 3, seed: 2, ClusterRuns.Reliable);
+    public async Task A_proposal_is_committed_on_every_replica() {
+        await using var cluster = await SimulatedCluster.CreateAsync(replicas: 3, seed: 2, ClusterRuns.Reliable);
         await cluster.StartAsync();
         await ClusterRuns.UntilAsync(cluster, () => ClusterRuns.Leader(cluster) is not null);
         var leader = ClusterRuns.Leader(cluster)!;
 
         var proposal = cluster.Replica(leader).ProposeAsync(new byte[] { 1 }, false, TestContext.Current.CancellationToken);
         var committed = await ClusterRuns.UntilAsync(cluster, () => proposal.IsCompleted);
-        committed.Should().BeTrue("the proposal must commit on a healthy 3-copy cluster");
+        committed.Should().BeTrue("the proposal must commit on a healthy 3-replica cluster");
 
         var result = await proposal;
-        result.Status.Should().Be(ProposalStatus.Accepted);
+        result.Status.Should().Be(ProposalStatus.Committed);
 
         foreach (var machine in cluster.Machines) {
             var caughtUp = await ClusterRuns.UntilAsync(cluster, () => cluster.Replica(machine).CommitIndex >= result.Index);
@@ -36,8 +36,8 @@ public class SimulatedClusterTests {
     }
 
     [Fact]
-    public async Task A_restarted_copy_catches_up() {
-        await using var cluster = await SimulatedCluster.CreateAsync(copies: 3, seed: 3, ClusterRuns.Reliable);
+    public async Task A_restarted_replica_catches_up() {
+        await using var cluster = await SimulatedCluster.CreateAsync(replicas: 3, seed: 3, ClusterRuns.Reliable);
         await cluster.StartAsync();
         await ClusterRuns.UntilAsync(cluster, () => ClusterRuns.Leader(cluster) is not null);
         var leader = ClusterRuns.Leader(cluster)!;
@@ -45,7 +45,7 @@ public class SimulatedClusterTests {
         var first = cluster.Replica(leader).ProposeAsync(new byte[] { 1 }, false, TestContext.Current.CancellationToken);
         await ClusterRuns.UntilAsync(cluster, () => first.IsCompleted);
         var firstResult = await first;
-        firstResult.Status.Should().Be(ProposalStatus.Accepted);
+        firstResult.Status.Should().Be(ProposalStatus.Committed);
 
         // Crash a follower, let it miss a proposal, restart it: it catches up.
         var follower = cluster.Machines.First(machine => machine != leader);
@@ -54,7 +54,7 @@ public class SimulatedClusterTests {
         var second = cluster.Replica(leader).ProposeAsync(new byte[] { 2 }, false, TestContext.Current.CancellationToken);
         await ClusterRuns.UntilAsync(cluster, () => second.IsCompleted);
         var secondResult = await second;
-        secondResult.Status.Should().Be(ProposalStatus.Accepted);
+        secondResult.Status.Should().Be(ProposalStatus.Committed);
 
         await cluster.RestartAsync(follower);
         var caughtUp = await ClusterRuns.UntilAsync(cluster, () =>
@@ -64,7 +64,7 @@ public class SimulatedClusterTests {
 
     [Fact]
     public async Task A_minority_island_cannot_commit_while_the_majority_does() {
-        await using var cluster = await SimulatedCluster.CreateAsync(copies: 3, seed: 4, ClusterRuns.Reliable);
+        await using var cluster = await SimulatedCluster.CreateAsync(replicas: 3, seed: 4, ClusterRuns.Reliable);
         await cluster.StartAsync();
         await ClusterRuns.UntilAsync(cluster, () => ClusterRuns.Leader(cluster) is not null);
         var leader = ClusterRuns.Leader(cluster)!;
@@ -94,12 +94,12 @@ public class SimulatedClusterTests {
         committed.Should().BeTrue("the majority commits while the minority cannot");
 
         var result = await proposal;
-        result.Status.Should().Be(ProposalStatus.Accepted);
+        result.Status.Should().Be(ProposalStatus.Committed);
     }
 
     [Fact]
-    public async Task A_crash_during_a_file_operation_takes_the_copy_down() {
-        await using var cluster = await SimulatedCluster.CreateAsync(copies: 3, seed: 5, ClusterRuns.Reliable with { Disk = true });
+    public async Task A_crash_during_a_file_operation_takes_the_replica_down() {
+        await using var cluster = await SimulatedCluster.CreateAsync(replicas: 3, seed: 5, ClusterRuns.Reliable with { Disk = true });
         await cluster.StartAsync();
         var elected = await ClusterRuns.UntilAsync(cluster, () => ClusterRuns.Leader(cluster) is not null);
         elected.Should().BeTrue();
@@ -112,7 +112,7 @@ public class SimulatedClusterTests {
         var proposal = cluster.Replica(leader).ProposeAsync(new byte[] { 1 }, false, TestContext.Current.CancellationToken);
         await cluster.StepAsync(TimeSpan.FromMilliseconds(200));
 
-        cluster.IsRunning(leader).Should().BeFalse("the copy crashed during the write of its entry");
+        cluster.IsRunning(leader).Should().BeFalse("the replica crashed during the write of its entry");
         proposal.IsCompleted.Should().BeTrue();
         (await proposal).Status.Should().Be(ProposalStatus.Unknown);
     }

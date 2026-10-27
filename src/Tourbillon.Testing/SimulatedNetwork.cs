@@ -39,58 +39,58 @@ sealed class SimulatedNetwork {
     }
 
     /// <summary>
-    /// Every message a copy handed to the network, in send order: who sent what to
+    /// Every message a replica handed to the network, in send order: who sent what to
     /// whom. The entries of an append request are copied at the send.
     /// </summary>
     public List<(string From, string To, object Message)> Sent { get; } = new();
 
     /// <summary>
-    /// Sends a vote request from one copy to another.
+    /// Sends a vote request from one replica to another.
     /// </summary>
     public void Send(string from, string to, VoteRequest message) =>
         Enqueue(from, to, message);
 
     /// <summary>
-    /// Sends a vote response from one copy to another.
+    /// Sends a vote response from one replica to another.
     /// </summary>
     public void Send(string from, string to, VoteResponse message) =>
         Enqueue(from, to, message);
 
     /// <summary>
-    /// Sends an append request from one copy to another; the entries are copied, the
+    /// Sends an append request from one replica to another; the entries are copied, the
     /// memory of the message is only valid during the call.
     /// </summary>
     public void Send(string from, string to, AppendRequest message) =>
         Enqueue(from, to, Copy(message));
 
     /// <summary>
-    /// Sends an append response from one copy to another.
+    /// Sends an append response from one replica to another.
     /// </summary>
     public void Send(string from, string to, AppendResponse message) =>
         Enqueue(from, to, message);
 
     /// <summary>
-    /// Cuts the directed link from one copy to another: messages that way are dropped,
+    /// Cuts the directed link from one replica to another: messages that way are dropped,
     /// in flight or not yet sent.
     /// </summary>
     public void Cut(string from, string to) =>
         _cuts.Add((from, to));
 
     /// <summary>
-    /// Opens the directed link from one copy to another again.
+    /// Opens the directed link from one replica to another again.
     /// </summary>
     public void Heal(string from, string to) =>
         _cuts.Remove((from, to));
 
     /// <summary>
-    /// Splits the copies into islands; messages between islands are dropped, in flight
+    /// Splits the replicas into islands; messages between islands are dropped, in flight
     /// or not yet sent.
     /// </summary>
     public void Partition(params string[][] islands) =>
         _islands = islands;
 
     /// <summary>
-    /// Removes every cut and partition: every copy can reach every other copy again.
+    /// Removes every cut and partition: every replica can reach every other replica again.
     /// </summary>
     public void Heal() {
         _islands = [_machines];
@@ -99,7 +99,7 @@ sealed class SimulatedNetwork {
 
     /// <summary>
     /// Drops every message in flight to <paramref name="machine"/>: a crash takes what
-    /// was on its way to the copy with it.
+    /// was on its way to the replica with it.
     /// </summary>
     public void DropInFlightTo(string machine) =>
         _queue.RemoveAll(delivery => delivery.To == machine);
@@ -148,7 +148,7 @@ sealed class SimulatedNetwork {
             : TimeSpan.FromTicks(_random.NextInt64(minTicks, maxTicks));
     }
 
-    // Reordering off: delivery between one pair of copies stays in send order, whatever
+    // Reordering off: delivery between one pair of replicas stays in send order, whatever
     // the sampled delays say.
     DateTimeOffset ClampToArrivalOrder(string from, string to, DateTimeOffset arrival) {
         var key = (from, to);

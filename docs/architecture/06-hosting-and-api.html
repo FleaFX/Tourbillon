@@ -12,98 +12,76 @@
   <p class="kicker">Chapter 6</p>
   <h1>Hosting and API</h1>
 
-
-  <div class="summary">
-    <strong>In three sentences</strong>
-    <p>Tourbillon runs inside its user, which runs inside an application of yours, the host: one Tourbillon instance can carry many groups, and several instances can run side by side in one process. Tourbillon never opens a network port: the host puts its endpoints in its own web application and makes sure only its own machines can reach them. The user has one small API to run its groups, every setting has a default, and a test package lets users try their own state against crashes and a broken network.</p>
-  </div>
+  <p>The earlier chapters describe one group. In practice Tourbillon runs inside an application, next to other code, with many groups at once. Here I describe how it fits in there, the API the application works with, and the test package.</p>
 
   <h2>Where Tourbillon runs</h2>
-  <p>Tourbillon is a library inside its user. Remontoire and MSSP build it in; an application, the host, builds in Remontoire or MSSP. So Tourbillon always runs in the process of the host, on every machine the host runs on.</p>
-  <p>One Tourbillon instance carries all the groups of one user on that machine, each in its own folder under one data folder. Remontoire may have hundreds of groups, one per partition; MSSP has one. Messages of many groups that go to the same machine travel together, so many groups do not mean many separate conversations.</p>
-  <p>Several instances can run side by side in one process, for example a Remontoire and an MSSP in the same service, or one Remontoire per customer. They share nothing: each has its own data folder, settings and measurements. Tourbillon keeps no state that is shared by the whole process.</p>
+  <p>Tourbillon is a library inside the application, and the application runs in a host. By host I mean the process that a team deploys on its machines, and it has a web server of its own. Remontoire and MSSP are libraries too, so with them there are three layers: a service builds in Remontoire, and Remontoire builds in Tourbillon. An application that uses Tourbillon directly is its own host. In both cases, Tourbillon runs in the host's process, on every machine the host runs on.</p>
+  <p>One Tourbillon instance carries all the groups of one application on that machine, each in its own folder under one data folder. Remontoire may have hundreds of groups, one per partition; MSSP has one. The messages of many groups that go to the same machine travel together, so many groups do not mean many separate conversations.</p>
+  <p>Several instances can run side by side in one process, for example a Remontoire and an MSSP in the same service, or one Remontoire per customer. They share nothing: each has its own data folder, settings and measurements, and Tourbillon keeps no state that is shared by the whole process.</p>
 
   <h2>The network goes through the host</h2>
-  <p>The copies of a group talk to each other over the network. Tourbillon does not open a port for that. It supplies endpoints, and the host puts them in its own web application, next to its other endpoints. The host chooses the port and protects the traffic.</p>
-  <p>Tourbillon trusts every copy of a group (chapter 1), so protecting this traffic is not optional. At the least, the host makes sure that:</p>
-  <ul>
-    <li>only its own machines can reach the endpoints, for example because every machine has a certificate and both sides check each other's (mutual TLS);</li>
-    <li>it tells Tourbillon which machine a connection comes from, for example the name in its certificate.</li>
-  </ul>
-  <p>A message between copies does not say who sent it: Tourbillon only knows that from what the host says about the connection. So one machine cannot speak in the name of another. Tourbillon refuses a message about a group that the sending machine has no copy of. That mostly catches mistakes rather than attacks: two machines set up with the same name, a test machine that reaches production, a removed machine that keeps running.</p>
+  <p>The replicas of a group talk to each other over the network, but we open no port for that. Tourbillon supplies endpoints, and the host puts them in its own web server next to its other endpoints. The host chooses the port and protects the traffic.</p>
+  <p>I could have let Tourbillon open a port of its own. But the host already has a web server that its team knows how to secure and watch, and a second server in the same process would need all of that a second time. With endpoints, the replicas talk over the port the host already has. The core of Tourbillon knows the network only through an interface, and gRPC is in a package of its own. I do not want to force gRPC on anyone; for now it is the only transport, but another one can be added without touching the core.</p>
+  <p>Tourbillon trusts every replica of a group (chapter 1), so the host has to protect this traffic. At the least, the host makes sure that only its own machines can reach the endpoints, for example because every machine has a certificate and both sides check each other's (mutual TLS), and it tells Tourbillon which machine a connection comes from, for example the name in its certificate.</p>
+  <p>A message between replicas does not say who sent it; Tourbillon only knows that from what the host says about the connection, so one machine cannot speak in the name of another. Tourbillon refuses a message about a group that the sending machine has no replica of. That mostly catches mistakes rather than attacks: two machines set up with the same name, a test machine that reaches production, a removed machine that keeps running.</p>
 
   <h2>The API</h2>
-  <p>The user works with its groups through one small API. Per group, it can:</p>
+  <p>The application works with its groups through one small API. Per group, it can:</p>
   <ul>
-    <li><strong>Start</strong> a group on this machine, with its copies, or open it again after a restart, saying up to which index its own state is on disk (chapter 3).</li>
-    <li><strong>Propose</strong> entries. The answer is always accepted with the index, refused with a reason, or unknown (chapter 4). With every proposal, the user says whether the entry may use the reserve (chapter 2).</li>
-    <li><strong>Read</strong> the accepted entries: an endless sequence, in the order of the log, that first catches up and then follows new entries as they are accepted.</li>
-    <li><strong>Let go</strong> of the start of the log up to an index, and give or take in a snapshot when Tourbillon asks for it (chapter 3).</li>
-    <li><strong>Add or remove a copy</strong>, and <strong>hand over</strong> leadership (chapter 5).</li>
-    <li><strong>Look</strong>: which copy leads, the term, and how far every copy is.</li>
-    <li><strong>Remove</strong> its copy from this machine, which deletes its folder.</li>
+    <li>start the group on this machine with its replicas, or open it again after a restart, saying up to which index its own state is on disk (chapter 3);</li>
+    <li>propose entries, each with whether it may use the reserve (chapter 2); the answer is always committed with the index, refused with a reason, or unknown (chapter 4);</li>
+    <li>read the committed entries through the feed, an endless sequence in the order of the log that first catches up and then follows new entries as they are committed;</li>
+    <li>let go of the start of the log up to an index, and give or take in a snapshot when Tourbillon asks for it (chapter 3);</li>
+    <li>add or remove a replica, and transfer leadership (chapter 5);</li>
+    <li>look: which replica leads, the term, and how far every replica is;</li>
+    <li>remove its replica from this machine, which deletes its folder.</li>
   </ul>
-  <p>The accepted entries are lent, not given. Tourbillon reads them from disk into a piece of memory, and hands the user a batch that points into it. When the user asks for the next batch, Tourbillon uses the same memory again for the next entries. An example:</p>
+  <p>Who may call this API is not Tourbillon's business; that is up to the application and the host.</p>
+
+  <h2>Reading committed entries</h2>
+  <p>The application does not get its own copy of the committed entries. We read them from disk into a piece of memory and hand the application a batch that points into it. When the application asks for the next batch, we use the same memory again for the next entries. An example:</p>
   <ol class="steps">
     <li>Remontoire gets a batch with entries 501 to 600. Entry 550 is an acknowledgement: Remontoire reads the position from it and moves the cursor of the group. It needs nothing more from the entry, so it copies nothing.</li>
     <li>Entry 560 is a message that must be parked. Remontoire has to keep it anyway, so it copies that one entry into its own storage.</li>
     <li>Remontoire asks for the next batch, entries 601 to 700. They take the place of 501 to 600 in the same memory.</li>
   </ol>
-  <p>So the rule for the user: what you still need after a batch, you copy yourself. Giving every entry its own memory instead would be simpler, but at a hundred thousand entries per second that means a hundred thousand pieces of memory per second for .NET to clean up, mostly for entries nobody keeps. A user that forgets to copy would see wrong bytes later, without any error. That is why the test package fills the memory with rubbish after every batch: such a mistake then shows up at once in the user's own tests, not one day in production.</p>
+  <p>The rule for the application is therefore: what you still need after a batch, you copy yourself.</p>
+  <p>Giving every entry its own memory would be simpler. But allocations have to stay low in Tourbillon, so lending was the obvious choice for me. One log on the laptop of chapter 2 can write 352,000 entries per second, and the feed has to keep up with that; with its own memory per entry, that would be as many pieces of memory per second for .NET to clean up, mostly for entries nobody keeps. The price of lending is a mistake that does not show: an application that forgets to copy sees wrong bytes later, without any error. That is why the test package fills the memory with rubbish after every batch, so that such a mistake is much more likely to show up in the application's own tests than in production.</p>
 
   <h2>Settings</h2>
-  <p>Every setting has a default, so a user can start without choosing anything. The book names the settings; their default values are a choice for the implementation.</p>
+  <p>Every setting has a default, so an application can start without choosing anything. The book names the settings; their default values are a choice for the implementation.</p>
   <table>
     <thead><tr><th>Of</th><th>Setting</th><th>Chapter</th></tr></thead>
     <tbody>
-      <tr><td>Group</td><td>The copies, chosen by the user when it starts the group</td><td>4</td></tr>
+      <tr><td>Group</td><td>The replicas, chosen by the application when it starts the group</td><td>4</td></tr>
       <tr><td>Group</td><td>Segment size</td><td>2</td></tr>
       <tr><td>Instance</td><td>Maximum storage size, and the size of the reserve</td><td>2</td></tr>
-      <tr><td>Instance</td><td>How often the leader sends a sign of life, and how long a follower waits before it asks the trial question</td><td>4, 5</td></tr>
+      <tr><td>Instance</td><td>How often the leader sends a heartbeat, and the election timeout</td><td>4, 5</td></tr>
       <tr><td>Instance</td><td>How much the leader sends a follower in one go, and the size of a snapshot piece</td><td>4, 5</td></tr>
     </tbody>
   </table>
 
   <h2>Watching Tourbillon</h2>
-  <p>Tourbillon gives measurements and traces through the standard .NET mechanisms, which OpenTelemetry understands, and writes its logs through the logging of the host. Each instance has its own measurements. Examples: how long a write to disk takes, entries accepted per second, storage used, elections; and per group: which copy leads, and how far behind every copy is. Tourbillon also offers health checks the host can register, such as a log that reported itself broken (chapter 2), or a group that has had no leader for too long. Which dashboard or tool shows this is the host's choice.</p>
+  <p>Tourbillon gives measurements and traces through the standard .NET mechanisms, which OpenTelemetry understands, and writes its logs through the logging of the host. Each instance has its own measurements: how long an fsync takes, entries committed per second, storage used, elections, and per group which replica leads and how far behind every replica is. Tourbillon also offers health checks the host can register, such as a log that reported itself broken (chapter 2), or a group that has had no leader for too long. Which dashboard or tool shows all this is the host's choice.</p>
 
   <h2>The test package</h2>
-  <p>Most mistakes in this kind of software show only under bad luck: a crash at the wrong moment, a message that arrives late or twice. So Tourbillon comes with a test package that makes bad luck on purpose. It runs a group of several copies in one test, with a fake network and a fake clock, and brings in faults: messages lost, late or out of order, machines that crash and lose what was not on disk yet, a network split in two. After every step, it checks that the rules of chapter 4 still hold.</p>
-  <p>Users test with it too: Remontoire and MSSP run their own state on top of it, and check their own rules under the same bad luck. Every run is driven by one number, so a run that fails can be repeated exactly.</p>
+  <p>Many mistakes in this kind of software show only under bad luck: a crash at the wrong moment, a message that arrives late or twice. So I wrote a test package that makes bad luck on purpose. It runs a group of several replicas in one test, with a simulated network, disk and clock, and brings in faults: messages lost, late or out of order, machines that crash and lose what was not on disk yet, a network split in two. After every step it checks the five safety properties of the Raft paper and the promises of chapter 4.</p>
+  <p>Every run is driven by one number, the seed, so a run that fails can be repeated exactly. Tourbillon's own tests run 100 seeds on the simulated disk with every change. Applications test with the same package: Remontoire and MSSP run their own state on top of it, and check their own rules under the same bad luck.</p>
 
   <div class="promises">
     <strong>What must always be true</strong>
     <ul>
       <li>Tourbillon never opens a network port by itself.</li>
       <li>Instances in one process share nothing.</li>
-      <li>Tourbillon knows who sent a message only from what the host says about the connection, and refuses a message about a group the sending machine has no copy of.</li>
-      <li>A proposal always ends accepted, refused or unknown.</li>
+      <li>Tourbillon knows who sent a message only from what the host says about the connection, and refuses a message about a group the sending machine has no replica of.</li>
+      <li>A proposal always ends committed, refused or unknown.</li>
       <li>Every setting has a default.</li>
     </ul>
   </div>
-
-  <h2>What Tourbillon does not do here</h2>
-  <ul>
-    <li>Tourbillon does not choose certificates, ports or how the traffic is protected; the host does.</li>
-    <li>Tourbillon does not decide who may use the user's own API; that is the user's and the host's business.</li>
-    <li>Tourbillon does not choose a dashboard, an exporter or a log tool.</li>
-  </ul>
-
-  <h2>Words used in this chapter</h2>
-  <dl class="glossary">
-    <dt>Host</dt>
-    <dd>The application of yours that builds in the user, and so Tourbillon, and runs it.</dd>
-    <dt>Instance</dt>
-    <dd>One Tourbillon in a process, with its own data folder, settings and measurements, carrying the groups of one user.</dd>
-    <dt>Endpoint</dt>
-    <dd>A part of the host's web application through which the copies of a group reach each other.</dd>
-    <dt>Default</dt>
-    <dd>The value a setting has when nobody chooses one.</dd>
-  </dl></article>
+</article>
 <nav class="pages">
-  <a href="05-changing-the-copies.html"><span>← Chapter 5</span></a>
+  <a href="05-changing-the-replicas.html"><span>← Chapter 5</span></a>
   <a href="index.html"><span>Contents</span></a>
-  <span></span>
 </nav>
 </main>
 </body>

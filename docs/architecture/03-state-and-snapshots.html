@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>State and snapshots</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<article>
+  <p class="kicker">Chapter 3</p>
+  <h1>State and snapshots</h1>
+
+  <p>In the end, what counts is what the application builds from the log. Raft calls that the state machine: every machine applies the same entries in the same order and so reaches the same state. Here I draw the line between Tourbillon and the application: how the entries reach the application, who keeps the state, and who decides when the start of the log may go.</p>
+
+  <h2>Applying the entries</h2>
+  <p>Tourbillon hands the application every committed entry through the feed: a sequence in the order of the log, without skipping one. The application applies each entry to its state, MSSP for example by adding the event in it to its storage. What the application does with an entry, Tourbillon never sees.</p>
+  <p>We also write a few entries of our own: the empty entry of a new leader (chapter 4) and the entries that change the replicas of a group (chapter 5). The feed hands those too, marked as Tourbillon's, and the application skips them or reads them. I chose that over a feed with only the application's entries, because then every index in the feed follows the one before it, and the point the application has applied up to is simply the last index it saw.</p>
+  <p>Committing and applying are two different moments. An entry is committed once it is safe (chapter 2); the application applies it a little later, at its own pace. We do not wait for the application before we answer "committed", so a slow application should not make proposing slower. I measured it: in a group of three with 100 proposers, a feed reader that slept 10 ms after every batch left the group at 9,154 committed proposals per second, against 9,429 without the pause, within the noise of the measurement.</p>
+  <p>"Committed" therefore only means that the entry is safely in the log, not that the application has done what the entry asks. Usually the difference does not matter, but sometimes it does. An example with MSSP:</p>
+  <ol class="steps">
+    <li>A service asks MSSP: "add this event to stream <code>order-42</code>, which should be at version 7". At the same moment, a second service asks the same, with another event.</li>
+    <li>MSSP proposes both as entries. Tourbillon commits them one after the other: the first at index 501, the second at index 502. Both are now safely in the log.</li>
+    <li>MSSP applies entry 501: the stream is at version 7, so the event is added, and the stream goes to version 8. Then it applies entry 502: the stream is no longer at version 7, so that event is refused.</li>
+    <li>Only now does MSSP know what to answer each service: "added" to the first, "conflict" to the second.</li>
+  </ol>
+  <p>MSSP answers its service once it has applied the entry, not at "committed". Tourbillon helps by giving the index of every committed entry, so MSSP knows to wait until it has applied index 502 before it answers the second service. It cannot check the version before it proposes, because two services can propose at the same moment and only the order in the log decides which one was first. Entry 502 stays in the log, although it changed nothing: Tourbillon never takes a committed entry back, and what such an entry means is up to the application.</p>
+
+  <h2>The application keeps its own state</h2>
+  <p>The state belongs to the application, in a form it chooses itself, and Tourbillon never touches it. Together with its state, the application stores up to which index it has applied the log, in the same step, so that after a crash the two always match.</p>
+  <p>It does not have to store its state after every entry. When the application starts again, it tells Tourbillon up to which index its state on disk goes, and the feed hands it every committed entry after that index again, in order. So an application may keep its state in memory for a while and write it to disk now and then; what was not on disk yet simply comes again from the log.</p>
+
+  <h2>Letting go of the start of the log</h2>
+  <p>A log cannot grow forever. Now and then the application tells Tourbillon up to which index it no longer needs the log: it lets go up to that point, and Tourbillon removes the segments that lie completely before it (chapter 2). Raft calls this log compaction.</p>
+  <p>The entries before that point are then gone, but another machine may still need what they held: a new replica, or a replica that fell far behind (chapter 4). It cannot get those entries any more, so it gets the state instead. That is why the application may only let go up to a point where it can give its state as it was at that point: a snapshot. A machine that starts from the snapshot and then applies every entry after it ends up with the same state as all the others.</p>
+
+  <figure>
+    <svg viewBox="0 0 680 200" role="img" aria-labelledby="fig3-title">
+      <title id="fig3-title">A log from index 1001 to 3000. The application let go up to index 1000 and has a snapshot there. Its state on disk goes up to index 2500. After a restart, the feed hands it the entries from 2501 to 3000 again.</title>
+      <defs>
+        <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+      </defs>
+
+      <rect class="box" x="1" y="30" width="138" height="70" rx="6" stroke-dasharray="6 4" opacity="0.6"/>
+      <text class="label" x="70" y="60" text-anchor="middle">1–1000</text>
+      <text class="note" x="70" y="82" text-anchor="middle">let go</text>
+
+      <rect class="box" x="149" y="30" width="350" height="70" rx="6"/>
+      <text class="label" x="324" y="60" text-anchor="middle">1001–2500</text>
+      <text class="note" x="324" y="82" text-anchor="middle">already in the state on disk</text>
+
+      <rect class="box-main" x="509" y="30" width="170" height="70" rx="6"/>
+      <text class="label" x="594" y="60" text-anchor="middle">2501–3000</text>
+      <text class="note" x="594" y="82" text-anchor="middle">again after a restart</text>
+
+      <path class="arrow" d="M144,160 L144,104"/>
+      <text class="step" x="144" y="180" text-anchor="middle">snapshot at 1000</text>
+
+      <path class="arrow" d="M504,160 L504,104"/>
+      <text class="step" x="504" y="180" text-anchor="middle">state on disk up to 2500</text>
+    </svg>
+    <figcaption>Figure 3. Three points in one log: up to where the application let go (with its snapshot), up to where its state is on disk, and the end of the log.</figcaption>
+  </figure>
+
+  <p>The application keeps its snapshots itself, in its own form. Tourbillon only asks for one when another machine needs it, and hands a received snapshot to the application on that machine to start from. Chapter 5 says how a snapshot travels.</p>
+  <p>Some Raft libraries decide themselves when to take a snapshot, and the application only serialises its state. I cannot let Tourbillon decide that, because it never reads the entries and so cannot know when a part of the log is no longer needed.</p>
+
+  <h2>How MSSP and Remontoire use this</h2>
+  <p>The two applications let go for different reasons, and their snapshots look very different; I treat them the same way. MSSP keeps every event forever, in its own files. Once a part of the log is safely in those files, MSSP no longer needs it and lets go, and its snapshot is those files: large, because they hold every event.</p>
+  <p>Remontoire keeps its messages in the log itself and reads them from there, so it lets go only once the retention of the stream allows it. Its snapshot is small: the cursors of the groups and the copies of parked messages, as they were at that point. The messages after it are still in the log.</p>
+
+  <div class="promises">
+    <strong>What must always be true</strong>
+    <ul>
+      <li>The application gets every committed entry, in the order of the log, without gaps, and never an entry that was not committed.</li>
+      <li>After a restart, Tourbillon hands again every committed entry after the index up to where the application's state is on disk.</li>
+      <li>The application lets go only up to a point where it can give a snapshot; Tourbillon removes only what lies before that point.</li>
+      <li>A machine that starts from a snapshot and then applies every entry after it, ends up with the same state as every other machine.</li>
+      <li>Committing never waits for the application to apply.</li>
+    </ul>
+  </div>
+</article>
+<nav class="pages">
+  <a href="02-the-log-on-one-machine.html"><span>← Chapter 2</span></a>
+  <a href="index.html"><span>Contents</span></a>
+  <a href="04-several-machines.html"><span>Chapter 4 →</span></a>
+</nav>
+</main>
+</body>
+</html>

@@ -16,7 +16,7 @@ partial class Replica {
     /// turn, the heartbeat at the latest; a flush that wrote nothing and ended nothing
     /// reports no work. An append that fails without a fault refuses the proposals of
     /// the batch — the entries are in no log — and the NoOp stays pending; a faulted
-    /// log breaks the copy: the in-flight batch ends unknown.
+    /// log breaks the replica: the in-flight batch ends unknown.
     /// </summary>
     /// <returns>Whether the flush did any work.</returns>
     async ValueTask<bool> FlushAsync() {
@@ -89,7 +89,7 @@ partial class Replica {
             } catch (IOException) {
                 // The write was cut back: the entries of the batch are in no log, so
                 // the proposals are refused and nothing is sent; the NoOp stays
-                // pending. A faulted log broke the copy: the in-flight batch ends
+                // pending. A faulted log broke the replica: the in-flight batch ends
                 // unknown here — it is in no list — and the exception breaks the turn.
                 lock (_proposalsLock)
                     _appending = null;
@@ -186,7 +186,7 @@ partial class Replica {
     /// </summary>
     void TryCommit() {
         for (var candidate = _log.LastIndex; candidate > _commitIndex; candidate--) {
-            var replicated = 1;  // this copy
+            var replicated = 1;  // this replica
             foreach (var follower in _followers.Values) {
                 if (follower.Match >= candidate)
                     replicated++;
@@ -205,7 +205,7 @@ partial class Replica {
 
     /// <summary>
     /// Commits up to <paramref name="index"/>: the ready gate opens when the NoOp of the
-    /// term is committed, and the written proposals up to the index are accepted. The
+    /// term is committed, and the written proposals up to the index complete as committed. The
     /// commit index is published for the feed, which wakes a waiting reader; a reader
     /// that is not waiting costs the commit nothing.
     /// </summary>
@@ -217,21 +217,21 @@ partial class Replica {
         if (_role == ReplicaRole.Leader && !_isReady && index >= _noOpIndex)
             _isReady = true;
 
-        List<PendingProposal>? accepted = null;
+        List<PendingProposal>? committed = null;
         lock (_proposalsLock) {
             foreach (var (proposalIndex, proposal) in _writtenProposals) {
                 if (proposalIndex <= index)
-                    (accepted ??= new List<PendingProposal>()).Add(proposal);
+                    (committed ??= new List<PendingProposal>()).Add(proposal);
             }
 
-            if (accepted is not null)
-                foreach (var proposal in accepted)
+            if (committed is not null)
+                foreach (var proposal in committed)
                     _writtenProposals.Remove(proposal.Index);
         }
 
-        if (accepted is not null)
-            foreach (var proposal in accepted)
-                proposal.Complete(ProposalResult.Accepted(proposal.Index));
+        if (committed is not null)
+            foreach (var proposal in committed)
+                proposal.Complete(ProposalResult.Committed(proposal.Index));
 
         Volatile.Read(ref _feedReader)?.TrySetResult(true);
     }
@@ -287,13 +287,13 @@ partial class Replica {
     }
 
     /// <summary>
-    /// Handles an append request. A stale term is refused with this copy's term; the same
-    /// or a higher term makes this copy a follower of the sender and re-arms the election
+    /// Handles an append request. A stale term is refused with this replica's term; the same
+    /// or a higher term makes this replica a follower of the sender and re-arms the election
     /// timer, and the time of the request counts as "heard a leader". The consistency
-    /// check reports a conflict with a hint; entries this copy already has are skipped;
+    /// check reports a conflict with a hint; entries this replica already has are skipped;
     /// a real conflict truncates — never at or below the commit index, a broken rule
     /// throws — and the new entries are appended as one batch. A write that fails
-    /// without a fault leaves this copy silent: the leader sends again with the next
+    /// without a fault leaves this replica silent: the leader sends again with the next
     /// heartbeat. Then the commit index moves to the minimum of the leader's and the
     /// last index this request confirmed.
     /// </summary>
@@ -328,7 +328,7 @@ partial class Replica {
             return;
         }
 
-        // Skip the entries this copy already has; truncate only on a real conflict.
+        // Skip the entries this replica already has; truncate only on a real conflict.
         var position = 0;
         while (position < message.Entries.Length && message.PrevIndex + 1 + (ulong)position <= _log.LastIndex) {
             var index = message.PrevIndex + 1 + (ulong)position;
@@ -341,11 +341,11 @@ partial class Replica {
         if (position < message.Entries.Length) {
             var index = message.PrevIndex + 1 + (ulong)position;
             if (index <= _commitIndex)
-                throw new InvalidDataException($"The leader {message.From} asks this copy to replace the committed entry at index {index}.");
+                throw new InvalidDataException($"The leader {message.From} asks this replica to replace the committed entry at index {index}.");
         }
 
-        // A write failure at a follower is no fault of this copy: no response, and the
-        // leader sends again with the next heartbeat. A faulted log breaks the copy.
+        // A write failure at a follower is no fault of this replica: no response, and the
+        // leader sends again with the next heartbeat. A faulted log breaks the replica.
         var result = AppendResult.Stored;
         var confirmed = message.PrevIndex + (ulong)message.Entries.Length;
         try {
@@ -371,7 +371,7 @@ partial class Replica {
     }
 
     /// <summary>
-    /// Handles an append response. A higher term makes this copy a follower of that term;
+    /// Handles an append response. A higher term makes this replica a follower of that term;
     /// a response of an earlier term, or from a follower it does not know, is ignored.
     /// Any response of this term counts as hearing the follower. Stored sets the room
     /// back to free and Full from the first entry the follower did not take; both

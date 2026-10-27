@@ -6,7 +6,7 @@ using Tourbillon.Log;
 using Tourbillon.Raft;
 using Tourbillon.Testing;
 
-// Measures the log under concurrent appends (mode "log") or a group of three copies
+// Measures the log under concurrent appends (mode "log") or a group of three replicas
 // on the real disk (mode "raft"): per combination of log count or proposer count and
 // batch size, a closed loop of writers runs back to back, and the run reports
 // throughput and per-operation latency percentiles as a Markdown table.
@@ -84,7 +84,7 @@ static void RunLog(
             RunCombination(directory, logCount, batchSize, payload, recordLength, warmupSeconds, seconds);
 }
 
-// The "raft" mode: per batch size, one group of three copies, and a closed loop of
+// The "raft" mode: per batch size, one group of three replicas, and a closed loop of
 // that many concurrent proposers at the leader.
 static async Task RunRaftAsync(
     string directory,
@@ -103,9 +103,9 @@ static async Task RunRaftAsync(
         await RunRaftCombinationAsync(directory, batchSize, payload, warmupSeconds, seconds, slowReaderMs);
 }
 
-// One run of the "raft" mode: a group of three copies, each on its own directory
+// One run of the "raft" mode: a group of three replicas, each on its own directory
 // under the root, with real loops and the real disk; a closed loop of batchSize
-// concurrent proposers at the leader, and a reader on every copy's feed.
+// concurrent proposers at the leader, and a reader on every replica's feed.
 static async Task RunRaftCombinationAsync(
     string directory,
     int batchSize,
@@ -121,22 +121,22 @@ static async Task RunRaftCombinationAsync(
     Delete(root);
     Directory.CreateDirectory(root);
 
-    // Every copy gets a segmented log and a vote store on the real disk; the logs
+    // Every replica gets a segmented log and a vote store on the real disk; the logs
     // are counted, so the leader's appends show the real batch size.
     var logs = new SegmentedLog[machines.Length];
     var counting = new CountingLog[machines.Length];
     var replicas = new Dictionary<string, Replica>();
     for (var i = 0; i < machines.Length; i++) {
-        var copy = Path.Combine(root, machines[i]);
-        Directory.CreateDirectory(copy);
-        var storage = new StorageLimit(copy, maximumSize: null, reserveSize: 0);
-        logs[i] = await SegmentedLog.OpenAsync(DiskFileSystem.Instance, copy, SegmentSize, storage);
+        var replicaDirectory = Path.Combine(root, machines[i]);
+        Directory.CreateDirectory(replicaDirectory);
+        var storage = new StorageLimit(replicaDirectory, maximumSize: null, reserveSize: 0);
+        logs[i] = await SegmentedLog.OpenAsync(DiskFileSystem.Instance, replicaDirectory, SegmentSize, storage);
         counting[i] = new CountingLog(logs[i]);
         replicas[machines[i]] = new Replica(
             machines[i],
             machines,
             counting[i],
-            new FileVoteStore(DiskFileSystem.Instance, copy),
+            new FileVoteStore(DiskFileSystem.Instance, replicaDirectory),
             new InProcessTransport(machines[i], replicas),
             new ReplicaOptions(),
             TimeProvider.System,
@@ -150,7 +150,7 @@ static async Task RunRaftCombinationAsync(
     var leader = await WaitReadyLeaderAsync(replicas);
     var leaderLog = counting[Array.IndexOf(machines, leader)];
 
-    // Every copy's feed is read by a reader that copies nothing.
+    // Every replica's feed is read by a reader that copies nothing.
     var readers = new Task[machines.Length];
     for (var i = 0; i < machines.Length; i++)
         readers[i] = ReadFeedAsync(replicas[machines[i]].Feed!, slowReaderMs);
@@ -163,7 +163,7 @@ static async Task RunRaftCombinationAsync(
     // proposal that completes inside the window.
     var latencies = new List<long>();
     var appendsBefore = leaderLog.Appends;
-    var (accepted, other) = await RunProposersAsync(replicas[leader], payload, batchSize, seconds, latencies);
+    var (committed, other) = await RunProposersAsync(replicas[leader], payload, batchSize, seconds, latencies);
     var appends = leaderLog.Appends - appendsBefore;
 
     // Stop the group: the feeds end, the readers follow.
@@ -178,7 +178,7 @@ static async Task RunRaftCombinationAsync(
     Array.Sort(sorted);
 
     var window = (double)seconds;
-    var proposalsPerSecond = accepted / window;
+    var proposalsPerSecond = committed / window;
     var appendsPerSecond = appends / window;
 
     Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"## raft batch={batchSize} payload={payload.Length}"));
@@ -188,20 +188,20 @@ static async Task RunRaftCombinationAsync(
     Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"| {proposalsPerSecond:N0} | {Percentile(sorted, 0.50):N0} us | {Percentile(sorted, 0.99):N0} us | {Max(sorted):N0} us | {appendsPerSecond:N0} |"));
     Console.WriteLine();
     if (other > 0) {
-        Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"proposals that were not accepted: {other}"));
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"proposals that were not committed: {other}"));
         Console.WriteLine();
     }
 
     Delete(root);
 }
 
-// Waits for the group to elect a ready leader; a copy that breaks fails the run.
+// Waits for the group to elect a ready leader; a replica that breaks fails the run.
 static async Task<string> WaitReadyLeaderAsync(Dictionary<string, Replica> replicas) {
     var deadline = Stopwatch.GetTimestamp() + 60L * Stopwatch.Frequency;
     while (Stopwatch.GetTimestamp() < deadline) {
         foreach (var (machine, replica) in replicas)
             if (replica.Fault is { } fault)
-                throw new InvalidOperationException($"The copy '{machine}' broke: {fault.Message}", fault);
+                throw new InvalidOperationException($"The replica '{machine}' broke: {fault.Message}", fault);
 
         var leader = replicas.Where(pair => pair.Value.IsReady).Select(pair => pair.Key).FirstOrDefault();
         if (leader is not null)
@@ -213,8 +213,8 @@ static async Task<string> WaitReadyLeaderAsync(Dictionary<string, Replica> repli
     throw new InvalidOperationException("The group did not elect a ready leader within 60 s.");
 }
 
-// Reads one copy's feed until the copy stops, copying nothing; a slow reader sleeps
-// per batch, to show that accepting never waits for the feed.
+// Reads one replica's feed until the replica stops, copying nothing; a slow reader sleeps
+// per batch, to show that committing never waits for the feed.
 static async Task ReadFeedAsync(Feed feed, int slowReaderMs) {
     while (await feed.WaitToReadAsync()) {
         await feed.ReadAsync();
@@ -225,8 +225,8 @@ static async Task ReadFeedAsync(Feed feed, int slowReaderMs) {
 
 // A closed loop of count concurrent proposers at the leader, until the window of
 // seconds ends; one duration per proposal that completes inside the window, into
-// latencies when it is given. Returns the accepted and the other outcomes.
-static async Task<(long Accepted, long Other)> RunProposersAsync(
+// latencies when it is given. Returns the committed and the other outcomes.
+static async Task<(long Committed, long Other)> RunProposersAsync(
     Replica leader,
     byte[] payload,
     int count,
@@ -234,11 +234,11 @@ static async Task<(long Accepted, long Other)> RunProposersAsync(
     List<long>? latencies
 ) {
     var end = Stopwatch.GetTimestamp() + seconds * Stopwatch.Frequency;
-    var proposers = new Task<(long Accepted, long Other)>[count];
+    var proposers = new Task<(long Committed, long Other)>[count];
     for (var i = 0; i < count; i++)
         proposers[i] = Task.Run(async () => {
             var own = new List<long>();
-            long accepted = 0;
+            long committed = 0;
             long other = 0;
             while (Stopwatch.GetTimestamp() < end) {
                 var start = Stopwatch.GetTimestamp();
@@ -246,8 +246,8 @@ static async Task<(long Accepted, long Other)> RunProposersAsync(
                 if (Stopwatch.GetTimestamp() > end)
                     break;  // completed after the window: not measured
 
-                if (result.Status == ProposalStatus.Accepted) {
-                    accepted++;
+                if (result.Status == ProposalStatus.Committed) {
+                    committed++;
                     own.Add(Stopwatch.GetTimestamp() - start);
                 } else {
                     other++;
@@ -258,11 +258,11 @@ static async Task<(long Accepted, long Other)> RunProposersAsync(
                 lock (latencies)
                     latencies.AddRange(own);
 
-            return (accepted, other);
+            return (committed, other);
         });
 
     var results = await Task.WhenAll(proposers);
-    return (results.Sum(result => result.Accepted), results.Sum(result => result.Other));
+    return (results.Sum(result => result.Committed), results.Sum(result => result.Other));
 }
 
 static void RunCombination(

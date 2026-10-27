@@ -7,8 +7,8 @@ using Tourbillon.Testing;
 
 namespace Tourbillon.Raft;
 
-// One group of copies on the real disk, each in its own temporary directory, with
-// real loops and an in-process transport, for the tests of replicas on disk. A copy
+// One group of replicas on the real disk, each in its own temporary directory, with
+// real loops and an in-process transport, for the tests of replicas on disk. A replica
 // that is not started runs on a fake clock: the test runs its turns itself.
 sealed class DiskGroup : IAsyncDisposable {
     public const long SegmentSize = 4096;
@@ -36,12 +36,12 @@ sealed class DiskGroup : IAsyncDisposable {
     public Feed Feed(string machine) => _byName[machine].Feed!;
 
     public static async Task<DiskGroup> StartAsync(
-        int copies,
+        int replicas,
         ReplicaOptions? options = null,
         Func<string, IVoteStore>? votes = null,
         IReadOnlyList<string>? withoutLoop = null
     ) {
-        var machines = Enumerable.Range(1, copies).Select(index => $"machine-{index}").ToList();
+        var machines = Enumerable.Range(1, replicas).Select(index => $"machine-{index}").ToList();
         var group = new DiskGroup(machines, options ?? new ReplicaOptions(), votes);
         foreach (var machine in machines) {
             var index = machines.IndexOf(machine);
@@ -73,8 +73,8 @@ sealed class DiskGroup : IAsyncDisposable {
         return group;
     }
 
-    // Stops one copy and opens it again on the same directory, with the feed at the
-    // index the user applied: recovery gives the log back, the feed starts after it.
+    // Stops one replica and opens it again on the same directory, with the feed at the
+    // index the application applied: recovery gives the log back, the feed starts after it.
     public async Task ReopenAsync(string machine, ulong applied, bool startLoop = true) {
         var index = _machines.IndexOf(machine);
         await _replicas[index].DisposeAsync();
@@ -98,7 +98,7 @@ sealed class DiskGroup : IAsyncDisposable {
             await replica.LoadAsync(applied, TestContext.Current.CancellationToken);
     }
 
-    // Reads one copy's feed up to the target index, batch by batch: every batch must
+    // Reads one replica's feed up to the target index, batch by batch: every batch must
     // start right after the one before and never go beyond the commit index; the
     // entries are copied into the list.
     public static async Task ReadUpToAsync(Replica replica, ulong target, List<Entry> into) {

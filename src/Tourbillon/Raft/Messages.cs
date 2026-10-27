@@ -1,7 +1,7 @@
 namespace Tourbillon.Raft;
 
 /// <summary>
-/// The question of a candidate to a voter: may this copy vote for me in this term?
+/// The question of a candidate to a voter: may this replica vote for me in this term?
 /// </summary>
 /// <param name="Term">The term the candidate would use; for a PreVote its current term + 1.</param>
 /// <param name="LastIndex">The index of the last entry of the candidate's log.</param>

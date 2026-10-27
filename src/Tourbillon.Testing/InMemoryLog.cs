@@ -31,7 +31,7 @@ sealed class InMemoryLog : IRaftLog {
     }
 
     /// <summary>
-    /// The free space the storage limit measures; the cluster sets it to fill a copy or
+    /// The free space the storage limit measures; the cluster sets it to fill a replica or
     /// to free it again.
     /// </summary>
     public long FreeSpace {

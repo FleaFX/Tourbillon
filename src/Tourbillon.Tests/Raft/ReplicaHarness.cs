@@ -89,7 +89,7 @@ sealed class ReplicaHarness : IAsyncDisposable {
     public void StoreAt(string from, ulong index) =>
         Replica.Receive(from, new AppendResponse(Replica.Term, AppendResult.Stored, index, 0));
 
-    // Drives this copy to leader: fire the election timer, win the trial, win the real
+    // Drives this replica to leader: fire the election timer, win the trial, win the real
     // election.
     public async Task ElectAsync() {
         AdvancePastElectionTimeout();
@@ -108,7 +108,7 @@ sealed class ReplicaHarness : IAsyncDisposable {
         await TurnAsync();
     }
 
-    // Drives this copy to a ready leader: the election above, then the NoOp of the new
+    // Drives this replica to a ready leader: the election above, then the NoOp of the new
     // term stored by a quorum of the followers, so the ready gate opens.
     public async Task ElectReadyAsync() {
         await ElectAsync();

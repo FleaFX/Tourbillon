@@ -7,16 +7,16 @@ enum ProposalStatus : byte {
     /// <summary>
     /// The entry is committed.
     /// </summary>
-    Accepted = 1,
+    Committed = 1,
 
     /// <summary>
-    /// The entry will never be committed by this copy: it was not written, and a refusal
+    /// The entry will never be committed by this replica: it was not written, and a refusal
     /// is final.
     /// </summary>
     Refused = 2,
 
     /// <summary>
-    /// The entry was written but this copy lost track of it: it may or may not commit.
+    /// The entry was written but this replica lost track of it: it may or may not commit.
     /// </summary>
     Unknown = 3,
 }
@@ -31,7 +31,7 @@ enum RefusalReason : byte {
     None = 0,
 
     /// <summary>
-    /// This copy is not the leader.
+    /// This replica is not the leader.
     /// </summary>
     NotLeader = 1,
 
@@ -52,20 +52,20 @@ enum RefusalReason : byte {
 /// <param name="Status">What became of the proposal.</param>
 /// <param name="Index">The index of the entry; 0 when it was never written.</param>
 /// <param name="Reason">Why it was refused; <see cref="RefusalReason.None"/> otherwise.</param>
-/// <param name="Leader">The leader this copy knows of, when it is not the leader itself.</param>
+/// <param name="Leader">The leader this replica knows of, when it is not the leader itself.</param>
 readonly record struct ProposalResult(ProposalStatus Status, ulong Index, RefusalReason Reason, string? Leader) {
     /// <summary>
     /// The entry is committed at <paramref name="index"/>.
     /// </summary>
-    public static ProposalResult Accepted(ulong index) => new(ProposalStatus.Accepted, index, RefusalReason.None, null);
+    public static ProposalResult Committed(ulong index) => new(ProposalStatus.Committed, index, RefusalReason.None, null);
 
     /// <summary>
-    /// The entry was not written; it will never commit by this copy.
+    /// The entry was not written; it will never commit by this replica.
     /// </summary>
     public static ProposalResult Refused(RefusalReason reason, string? leader = null) => new(ProposalStatus.Refused, 0, reason, leader);
 
     /// <summary>
-    /// The entry was written but this copy lost track of it.
+    /// The entry was written but this replica lost track of it.
     /// </summary>
     public static ProposalResult Unknown => new(ProposalStatus.Unknown, 0, RefusalReason.None, null);
 }

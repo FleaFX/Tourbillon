@@ -7,7 +7,7 @@ partial class Replica {
     ulong _noOpIndex;
 
     /// <summary>
-    /// Makes this copy the leader of its term: every follower starts at the end of the
+    /// Makes this replica the leader of its term: every follower starts at the end of the
     /// log with room, the NoOp of the new term is pending, the ready gate stays closed
     /// until that NoOp commits, and the election timer gives way to the heartbeat.
     /// </summary>
@@ -66,13 +66,13 @@ partial class Replica {
     }
 
     /// <summary>
-    /// Whether a majority has room for an entry: this copy counts as free — its own log
+    /// Whether a majority has room for an entry: this replica counts as free — its own log
     /// refuses on its own — and a follower counts when it is free, or reserve-only for
     /// an entry that may use the reserve. A proposal without room is refused before it
     /// is written.
     /// </summary>
     bool HasRoomFor(bool mayUseReserve) {
-        var free = 1;  // this copy
+        var free = 1;  // this replica
         foreach (var follower in _followers.Values) {
             if (follower.Room == FollowerRoom.Free || (mayUseReserve && follower.Room == FollowerRoom.ReserveOnly))
                 free++;

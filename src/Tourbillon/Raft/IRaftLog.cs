@@ -1,7 +1,7 @@
 namespace Tourbillon.Raft;
 
 /// <summary>
-/// The log of one copy, as the replica uses it: the segmented log on disk
+/// The log of one replica, as the replica itself uses it: the segmented log on disk
 /// (<see cref="Log.SegmentedLog"/>) and, in tests, an in-memory log.
 /// </summary>
 interface IRaftLog {

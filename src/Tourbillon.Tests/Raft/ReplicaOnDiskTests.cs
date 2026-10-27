@@ -7,12 +7,12 @@ namespace Tourbillon.Raft;
 
 public class ReplicaOnDiskTests {
     [Fact]
-    public async Task A_one_copy_group_elects_itself_accepts_proposals_and_reopens_with_the_same_term_vote_and_entries() {
+    public async Task A_one_replica_group_elects_itself_commits_proposals_and_reopens_with_the_same_term_vote_and_entries() {
         await using var group = await DiskGroup.StartAsync(1);
         var replica = group.Replica("machine-1");
         var feed = replica.Feed!;
 
-        // The NoOp of the first term commits on its own: the copy elects itself.
+        // The NoOp of the first term commits on its own: the replica elects itself.
         (await feed.WaitToReadAsync(TestContext.Current.CancellationToken)).Should().BeTrue();
         var noOp = await feed.ReadAsync(TestContext.Current.CancellationToken);
         noOp.Length.Should().Be(1);
@@ -20,8 +20,8 @@ public class ReplicaOnDiskTests {
         replica.Role.Should().Be(ReplicaRole.Leader);
         replica.IsReady.Should().BeTrue();
 
-        var accepted = await replica.ProposeAsync(new byte[] { 42 }, false, TestContext.Current.CancellationToken);
-        accepted.Should().Be(ProposalResult.Accepted(2));
+        var committed = await replica.ProposeAsync(new byte[] { 42 }, false, TestContext.Current.CancellationToken);
+        committed.Should().Be(ProposalResult.Committed(2));
         var command = await feed.ReadAsync(TestContext.Current.CancellationToken);
         command.Length.Should().Be(1);
         command.Span[0].Index.Should().Be(2UL);
@@ -53,21 +53,21 @@ public class ReplicaOnDiskTests {
     }
 
     [Fact]
-    public async Task Three_copies_on_their_own_directories_accept_proposals_and_have_them_on_disk() {
+    public async Task Three_replicas_on_their_own_directories_commit_proposals_and_have_them_on_disk() {
         await using var group = await DiskGroup.StartAsync(3);
 
-        // Wait for a leader: every copy's feed wakes when its NoOp commits.
+        // Wait for a leader: every replica's feed wakes when its NoOp commits.
         await Task.WhenAll(group.Machines.Select(machine => group.Feed(machine).WaitToReadAsync(TestContext.Current.CancellationToken).AsTask()));
         var leader = group.Machines.Select(machine => group.Replica(machine)).Single(replica => replica.IsReady);
 
         var payload = new byte[] { 7, 7, 7 };
-        var accepted = await leader.ProposeAsync(payload, false, TestContext.Current.CancellationToken);
-        accepted.Should().Be(ProposalResult.Accepted(2));
+        var committed = await leader.ProposeAsync(payload, false, TestContext.Current.CancellationToken);
+        committed.Should().Be(ProposalResult.Committed(2));
 
         foreach (var machine in group.Machines)
             await DiskGroup.ReadUpToAsync(group.Replica(machine), 2, new List<Entry>());
 
-        // Every copy has the entry on disk.
+        // Every replica has the entry on disk.
         foreach (var machine in group.Machines) {
             var log = group.Log(machine);
             log.LastIndex.Should().Be(2UL);
@@ -80,7 +80,7 @@ public class ReplicaOnDiskTests {
     }
 
     [Fact]
-    public async Task A_users_D_above_the_last_index_refuses_the_open() {
+    public async Task An_applications_D_above_the_last_index_refuses_the_open() {
         using var directory = new TempDirectory();
         using var log = await SegmentedLog.OpenAsync(DiskFileSystem.Instance, directory.Path, DiskGroup.SegmentSize, DiskGroup.UnlimitedStorage(), TestContext.Current.CancellationToken);
         var appended = await log.AppendAsync(new[] { new Entry(1, 1, EntryKind.Command, EntryFlags.None, new byte[] { 1 }) });
