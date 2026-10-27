@@ -5,13 +5,13 @@ using Tourbillon.Raft;
 namespace Tourbillon.Testing;
 
 /// <summary>
-/// One seeded fault run: a 3-copy cluster, 300 steps of 20 ms with one random fault per
+/// One seeded fault run: a 3-replica cluster, 300 steps of 20 ms with one random fault per
 /// step — proposals, crashes, restarts, partitions, directed cuts, full storage — the
 /// invariants checked after every step, and a recovery at the end that requires one more
-/// proposal to be accepted.
+/// proposal to be committed.
 /// </summary>
 static class FaultRun {
-    const int Copies = 3;
+    const int Replicas = 3;
 
     /// <summary>
     /// Runs one fault run and returns what it came to. Throws
@@ -19,7 +19,7 @@ static class FaultRun {
     /// step, and <see cref="InvalidOperationException"/> when the group does not recover.
     /// </summary>
     public static async Task<FaultRunSummary> RunAsync(int seed, FaultRunOptions options) {
-        await using var cluster = await SimulatedCluster.CreateAsync(Copies, seed,
+        await using var cluster = await SimulatedCluster.CreateAsync(Replicas, seed,
             new SimulationOptions(options.DropChance, options.MinDelay, options.MaxDelay, options.AllowReorder, options.Disk));
         await using var runner = new Runner(seed, options, cluster);
         return await runner.RunAsync();
@@ -41,14 +41,14 @@ static class FaultRun {
         readonly StringBuilder _trace = new();
         readonly List<(string Machine, ulong Term)> _leaders = new();
         readonly SortedSet<ulong> _terms = new();
-        int _accepted;
+        int _committed;
         int _refused;
         int _unknown;
         long _payloads;
 
         /// <summary>
         /// Runs the fault steps, settles the group, and requires one more proposal to be
-        /// accepted.
+        /// committed.
         /// </summary>
         public async Task<FaultRunSummary> RunAsync() {
             await _cluster.StartAsync();
@@ -68,7 +68,7 @@ static class FaultRun {
                 }
             }
 
-            // Settle: heal the network, restart every crashed copy, free every storage.
+            // Settle: heal the network, restart every crashed replica, free every storage.
             _cluster.Network.Heal();
             foreach (var machine in _cluster.Machines) {
                 if (!_cluster.IsRunning(machine))
@@ -91,7 +91,7 @@ static class FaultRun {
                     break;
             }
 
-            // One more proposal: the group recovered, so it is accepted.
+            // One more proposal: the group recovered, so it is committed.
             var leader = ReadyLeader() ?? throw new InvalidOperationException($"[seed {seed}] the group did not recover: no ready leader after {Steps} fault steps");
             var payload = NextPayload();
             var last = _cluster.Replica(leader).ProposeAsync(payload, mayUseReserve: false, CancellationToken.None).AsTask();
@@ -111,12 +111,12 @@ static class FaultRun {
                 throw new InvalidOperationException($"[seed {seed}] the last proposal of the fault run never got an outcome");
 
             var result = last.Result;
-            if (result.Status != ProposalStatus.Accepted)
+            if (result.Status != ProposalStatus.Committed)
                 throw new InvalidOperationException($"[seed {seed}] the group did not recover: the last proposal ended {result.Status}");
 
             _trace.Append('|').Append(Convert.ToHexString(payload)).Append(':').Append(result.Status);
-            _accepted++;
-            return new FaultRunSummary(_accepted, _refused, _unknown, _leaders, _terms.ToList(), TraceHash(_trace));
+            _committed++;
+            return new FaultRunSummary(_committed, _refused, _unknown, _leaders, _terms.ToList(), TraceHash(_trace));
         }
 
         /// <inheritdoc/>
@@ -136,14 +136,14 @@ static class FaultRun {
                     var running = RunningMachines();
                     if (running.Length > 0)
                         Propose(running[_random.Next(running.Length)]);
-                    return "propose at a copy";
+                    return "propose at a replica";
                 }
                 case 2: {
                     var running = RunningMachines();
                     if (running.Length > 0) {
                         var machine = running[_random.Next(running.Length)];
                         if (options.Disk && _random.Next(2) == 0) {
-                            // Crash during one of the next file operations of the copy.
+                            // Crash during one of the next file operations of the replica.
                             await _cluster.CrashDuringAsync(machine, 1 + _random.Next(20));
                             return "crash during";
                         }
@@ -187,7 +187,7 @@ static class FaultRun {
             }
         }
 
-        // Proposes a fresh payload at one copy; the outcome is collected after a step.
+        // Proposes a fresh payload at one replica; the outcome is collected after a step.
         void Propose(string machine) {
             var payload = NextPayload();
             var task = _cluster.Replica(machine).ProposeAsync(payload, mayUseReserve: false, CancellationToken.None).AsTask();
@@ -212,8 +212,8 @@ static class FaultRun {
                 _proposals.RemoveAt(i);
                 var result = task.Result;
                 switch (result.Status) {
-                    case ProposalStatus.Accepted:
-                        _accepted++;
+                    case ProposalStatus.Committed:
+                        _committed++;
                         break;
                     case ProposalStatus.Refused:
                         _refused++;
@@ -256,7 +256,7 @@ static class FaultRun {
         }
 
         // The invariants over the whole run so far: the checker's violations and the
-        // users' feed checks both land here.
+        // applications' feed checks both land here.
         async Task CheckAsync() =>
             _checker.Assert(await _cluster.SnapshotAsync());
 

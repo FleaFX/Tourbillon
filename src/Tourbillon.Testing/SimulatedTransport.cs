@@ -3,7 +3,7 @@ using Tourbillon.Raft;
 namespace Tourbillon.Testing;
 
 /// <summary>
-/// One copy's view of the network of a <see cref="SimulatedCluster"/>: every send goes
+/// One replica's view of the network of a <see cref="SimulatedCluster"/>: every send goes
 /// to the cluster's <see cref="SimulatedNetwork"/>.
 /// </summary>
 sealed class SimulatedTransport(string from, SimulatedNetwork network) : ITransport {

@@ -4,8 +4,8 @@ using System.Runtime.CompilerServices;
 namespace Tourbillon.Raft;
 
 /// <summary>
-/// The accepted entries of one copy, in log order, from the index after the one the
-/// user named when it opened the group. A batch is lent: it points into the feed's
+/// The committed entries of one replica, in log order, from the index after the one the
+/// application named when it opened the group. A batch is lent: it points into the feed's
 /// buffer and is valid until the next read.
 /// </summary>
 sealed class Feed : IAsyncDisposable {

@@ -12,8 +12,8 @@ sealed class InProcessTransport : ITransport {
     readonly Dictionary<string, Replica> _replicas;
 
     /// <summary>
-    /// The transport of one copy: <paramref name="from"/> is the sender every send
-    /// starts from, and <paramref name="replicas"/> maps every copy's name to its
+    /// The transport of one replica: <paramref name="from"/> is the sender every send
+    /// starts from, and <paramref name="replicas"/> maps every replica's name to its
     /// replica.
     /// </summary>
     public InProcessTransport(string from, Dictionary<string, Replica> replicas) {

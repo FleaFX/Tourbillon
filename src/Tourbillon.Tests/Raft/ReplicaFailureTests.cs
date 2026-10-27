@@ -31,7 +31,7 @@ public class ReplicaFailureTests {
         h.StoreAt("machine-2", h.Log.LastIndex);
         await h.TurnAsync();
 
-        (await third).Should().Be(ProposalResult.Accepted(2));
+        (await third).Should().Be(ProposalResult.Committed(2));
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class ReplicaFailureTests {
     }
 
     [Fact]
-    public async Task A_faulted_log_at_the_leader_breaks_the_copy() {
+    public async Task A_faulted_log_at_the_leader_breaks_the_replica() {
         await using var h = await ReplicaHarness.MakeAsync();
         await h.LoadAsync();
         await h.ElectReadyAsync();
@@ -106,7 +106,7 @@ public class ReplicaFailureTests {
         await h.LoadAsync();
         await h.ElectAsync();
 
-        // The NoOp's append failed without a fault: it stays pending, the copy stays
+        // The NoOp's append failed without a fault: it stays pending, the replica stays
         // the leader, and the proposals wait behind the closed ready gate.
         h.Replica.Role.Should().Be(ReplicaRole.Leader);
         h.Replica.IsReady.Should().BeFalse();
@@ -125,7 +125,7 @@ public class ReplicaFailureTests {
     }
 
     [Fact]
-    public async Task A_failing_vote_store_breaks_the_copy_and_sends_no_vote() {
+    public async Task A_failing_vote_store_breaks_the_replica_and_sends_no_vote() {
         var votes = new FailingVoteStore();
         await using var h = await ReplicaHarness.MakeAsync(term: 1, votes: votes);
         await h.LoadAsync();

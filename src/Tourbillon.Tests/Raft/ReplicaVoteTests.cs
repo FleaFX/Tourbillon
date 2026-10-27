@@ -172,7 +172,7 @@ public class ReplicaVoteTests {
         await using var h = await ReplicaHarness.MakeAsync(term: 3);
         await h.LoadAsync();
 
-        // The trial for term 4; the other copies refuse with their own term.
+        // The trial for term 4; the other replicas refuse with their own term.
         h.AdvancePastElectionTimeout();
         await h.TurnAsync();
 

@@ -12,22 +12,20 @@
   <p class="kicker">Chapter 4</p>
   <h1>Several machines</h1>
 
+  <p>Here comes the core of Raft: how a few machines keep one log together, how they choose a leader, and why no committed entry is lost when a machine fails. I follow the Raft paper closely, and say where Tourbillon adds something, such as CheckQuorum or the three outcomes of a proposal.</p>
 
-  <div class="summary">
-    <strong>In three sentences</strong>
-    <p>With several machines, a log has a copy on each of a few of them, and together those copies form a group. One copy is the leader: it takes every new entry, hands it to the others, and calls it accepted once most copies have it on disk. If the leader fails, the others choose a new one that has every accepted entry, so one machine can fail without anything being lost.</p>
-  </div>
-
-  <h2>Groups and copies</h2>
-  <p>A group is one log, kept on several machines at once. Each machine keeps its own copy of the log, exactly as chapter 2 describes, and each has its own user that applies the entries to its own state (chapter 3). How many copies a group has is chosen by the user: 3 is usual, 5 for something that must survive two failures, 1 for one machine.</p>
-  <p>A machine can carry copies of many groups. Remontoire has a group for every partition of every stream, and one for its register; MSSP has one group.</p>
+  <h2>Groups and replicas</h2>
+  <p>A group is one log, kept on several machines at once, with its own leader and its own elections. Each machine keeps its own copy of the log exactly as chapter 2 describes, and each has its own application that applies the entries to its own state (chapter 3). Such a copy is called a replica. The application chooses how many replicas a group has: 3 is usual, 5 for something that must survive two failures, 1 for one machine.</p>
+  <p>An application can have many groups on the same machines, and they do not depend on each other: Remontoire, for example, has a group for every partition of a stream and one for its register, while MSSP has a single group. A machine then carries a replica of each of them. Every replica has its own files and does its own fsyncs.</p>
+  <p>When many groups write at the same time, their fsyncs wait for each other. I measured that on the laptop of chapter 2: 64 logs that all write at once share about 4,500 fsyncs per second, and a write then takes 13 to 17 ms at the median, against 1.1 ms for one log on its own. The total number of entries per second holds up.</p>
+  <p>Only after that measurement did I see that there was a choice here. The groups on a machine could also share one log, so that one fsync serves all of them; I expect a write would then wait much less, although I have not measured it. But a segment of such a log holds entries of many groups, and can only go once every group has let go of it. With Remontoire, which keeps its messages in the log until their stream lets them go, the slowest stream would then hold on to the space of all the others. Removing a replica would no longer be deleting one folder, and one damaged file would hit every group on the machine. So I kept one log per group, and pay for it with a longer wait when many groups are busy at once.</p>
 
   <h2>The leader and the majority</h2>
-  <p>One copy of a group is the leader; the others are followers. A new entry is always proposed to the leader. The leader writes it to its own disk, hands it to the followers, and each follower writes it to its own disk and answers. Once a majority of the copies has the entry on disk, the leader calls it accepted: 2 of 3, or 3 of 5. The leader counts itself too, but only once its own disk has stored the entry.</p>
+  <p>One replica of a group is the leader, and the others are followers. A new entry is always proposed to the leader. The leader writes it to its own disk and sends it to the followers, each follower writes it to its own disk and answers, and once a majority of the replicas has the entry on disk, the leader calls it committed: 2 of 3, or 3 of 5. Such a majority is also called a quorum. The leader counts itself too, but only once its own fsync has returned.</p>
 
   <figure>
     <svg viewBox="0 0 680 250" role="img" aria-labelledby="fig4-title">
-      <title id="fig4-title">The user proposes an entry to the leader on machine 1. The leader hands it to the followers on machines 2 and 3. The entry is accepted once 2 of the 3 copies have it on disk.</title>
+      <title id="fig4-title">The application proposes an entry to the leader on machine 1. The leader hands it to the followers on machines 2 and 3. The entry is committed once 2 of the 3 replicas have it on disk.</title>
       <defs>
         <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
@@ -35,7 +33,7 @@
       </defs>
 
       <rect class="box" x="1" y="90" width="150" height="70" rx="8"/>
-      <text class="label" x="76" y="122" text-anchor="middle">The user</text>
+      <text class="label" x="76" y="122" text-anchor="middle">The application</text>
       <text class="note" x="76" y="143" text-anchor="middle">on any machine</text>
 
       <rect class="box-main" x="246" y="90" width="170" height="70" rx="8"/>
@@ -58,108 +56,93 @@
       <text class="step" x="462" y="128" text-anchor="middle">2 copy</text>
 
       <path class="arrow" d="M242,145 L155,145"/>
-      <text class="step" x="197" y="168" text-anchor="middle">3 accepted</text>
+      <text class="step" x="197" y="168" text-anchor="middle">3 committed</text>
       <text class="note" x="197" y="186" text-anchor="middle">once 2 of 3 have it</text>
     </svg>
-    <figcaption>Figure 4. One group with three copies. Only the leader takes new entries; a majority on disk makes them accepted.</figcaption>
+    <figcaption>Figure 4. One group with three replicas. Only the leader takes new entries; a majority on disk makes them committed.</figcaption>
   </figure>
 
-  <p>Because only the leader adds entries, they are in the same order in every copy. A follower that gets a proposal does not add it: it answers with an error that names the leader, and the user proposes again there. The leader shares writes the same way chapter 2 describes: everything proposed while the disks were busy goes out together.</p>
-  <p>The followers also learn from the leader which entries are accepted, and hand those to their own user. So the users on all machines apply the same entries in the same order, a moment after each other.</p>
+  <p>Because only the leader adds entries, they stand in the same order in every replica. The followers also learn from the leader which entries are committed and hand those to their own application, so the applications on all machines apply the same entries in the same order, a moment after each other. The leader batches the same way chapter 2 describes: everything proposed while the disks were busy goes out together.</p>
+  <p>One proposal at a time costs two fsyncs in a row, the leader's and then the followers'. On the laptop of chapter 2, with a group of three in one process and entries of 256 bytes, one proposer gets 360 proposals per second at a median of 2.6 ms. With 100 proposers at once, one leader write carries about 50 proposals, and the group commits 9,400 proposals per second at a median of 10 ms.</p>
+  <p>A follower that gets a proposal does not add it. It answers with an error that names the leader, and the application proposes again there.</p>
+  <p>That a follower does not pass the proposal on to the leader itself was, at first, mostly to keep Tourbillon simple. Looking at it again, I think forwarding belongs one level up: the application knows its own request, and can forward the whole of it to the machine of the leader, or let its own clients go there directly.</p>
 
   <h2>Choosing a leader</h2>
-  <p>The leader sends the followers a short sign of life several times per second, also when there is nothing new. A follower that hears nothing for a while assumes the leader is gone, and asks the others to make it the new leader.</p>
-  <p>Elections are numbered: every new election gets a number one higher than the last one, called the term. A copy votes at most once per term, and only for a copy whose log is at least as complete as its own. A copy that gets the votes of a majority, its own included, is the leader for that term. Every copy stores the highest term it has seen and its vote on disk before it answers, so that a crash cannot make it vote twice.</p>
-  <p>That rule is why a new leader always has every accepted entry. An example with three machines:</p>
+  <p>The leader sends the followers a heartbeat several times per second, a short message that says it is still there, also when there is nothing new. A follower that hears nothing for an election timeout assumes the leader is gone and starts an election: it asks the others to make it the new leader.</p>
+  <p>Raft numbers its elections. Each new election gets a number one higher than the one before, and that number is called the term. In each term a replica can vote only once, and only for a replica whose log is at least as complete as its own. Whoever gets the votes of a majority, its own vote included, leads for that term. Before a replica answers, it stores the highest term it has seen and its vote on disk, with an fsync. Otherwise a crash could make it forget its vote and vote a second time.</p>
+  <p>Because a replica only votes for a log that is at least as complete as its own, a new leader always has every committed entry. An example with three machines:</p>
   <ol class="steps">
-    <li>Machine 1 leads in term 4. Entry 800 is on the disks of machines 1 and 2: that is 2 of 3, so it is accepted. Machine 3 has only up to entry 799.</li>
+    <li>Machine 1 leads in term 4. Entry 800 is on the disks of machines 1 and 2, which is 2 of 3, so it is committed. Machine 3 has only up to entry 799.</li>
     <li>Machine 1 fails. Machine 3 is the first to notice, and asks machine 2 for its vote in term 5.</li>
     <li>Machine 2 refuses: its own log has entry 800, the log of machine 3 does not. Machine 3 has only its own vote, 1 of 3, and does not become leader.</li>
     <li>A moment later, machine 2 asks for votes in term 6. Machine 3 agrees, since the log of machine 2 is at least as complete as its own. Machine 2 has 2 of 3 votes and leads, with entry 800.</li>
   </ol>
-  <p>This always works, because an accepted entry is on a majority, and every majority of voters shares at least one copy with it: that copy refuses any candidate that misses the entry. A group of three needs a short pause to choose a new leader, usually well under a second; then it goes on.</p>
-  <p>A new leader first adds one empty entry of its own term, and waits until it is accepted, before it takes proposals. That settles everything it inherited from earlier leaders: once the empty entry is accepted, every entry before it is too.</p>
+  <p>The Raft paper proves that this always works: a committed entry is on a majority, every majority of voters shares at least one replica with it, and that replica refuses any candidate that misses the entry. Chapter 5 adds PreVote, which changes this example a little, but not the rule.</p>
+  <p>While there is no leader, the group commits nothing. The pause lasts about one election timeout, a setting with a default (chapter 6), plus a round of votes; the same timeout decides how quickly a failure is noticed and how easily a slow network is mistaken for one.</p>
+  <p>A new leader first adds one empty entry of its own term and waits until it is committed, before it takes proposals. That settles everything it inherited from earlier leaders: once the empty entry is committed, every entry before it is too. The Raft paper explains why a leader may not count earlier entries on their own.</p>
 
-  <h2>Entries that were never accepted</h2>
-  <p>A leader can fail in the middle of its work, when an entry is already on its own disk but not yet on a majority. Then that entry was never accepted, and it can disappear. An example:</p>
+  <h2>Entries that were never committed</h2>
+  <p>A leader can fail in the middle of its work, when an entry is already on its own disk but not yet on a majority. That entry was never committed, and it can disappear. An example:</p>
   <ol class="steps">
-    <li>Machine 1 leads and writes entry 801 to its disk. Before it can hand it on, it is cut off from the network.</li>
-    <li>Machines 2 and 3 choose machine 2 as leader. Machine 2 takes a new proposal, and that one becomes entry 801 in the logs of machines 2 and 3: accepted.</li>
-    <li>Machine 1 comes back. The leader sees that its entry 801 differs, and replaces it with the accepted entry 801.</li>
+    <li>Machine 1 leads and writes entry 801 to its disk. Before it can send it on, it is cut off from the network.</li>
+    <li>Machines 2 and 3 choose machine 2 as leader. Machine 2 takes a new proposal, which becomes entry 801 in the logs of machines 2 and 3: committed.</li>
+    <li>Machine 1 comes back. The leader sees that its entry 801 differs, and replaces it with the committed entry 801.</li>
   </ol>
-  <p>Nothing that was accepted is lost by this: the replaced entry never reached a majority, so no user ever got "accepted" for it, and no user applied it. Accepted entries are never replaced.</p>
+  <p>Nothing committed is lost by this. The replaced entry never reached a majority, so no application got "committed" for it and none applied it. Committed entries are never replaced.</p>
 
   <h2>When the answer does not come</h2>
-  <p>In the example above, the user that proposed the first entry 801 never got an answer. It waited, and after a while it gave up: a timeout. Its entry was not accepted. But a timeout can also hide the opposite. The same example, a little different:</p>
+  <p>In the example above, the application that proposed the first entry 801 never got an answer. It waited, and after a while gave up. Its entry was not committed. But silence can also hide the opposite:</p>
   <ol class="steps">
-    <li>Machine 1 leads, writes entry 801 to its disk, and hands it to machine 2, which stores it. Then machine 1 is cut off, before it hears back from machine 2.</li>
-    <li>The user that proposed entry 801 gets no answer: a timeout.</li>
-    <li>Machines 2 and 3 choose machine 2 as leader. Its log has entry 801, so that entry stays, and becomes accepted after all.</li>
+    <li>Machine 1 leads, writes entry 801 to its disk, and sends it to machine 2, which stores it. Then machine 1 is cut off, before it hears back from machine 2.</li>
+    <li>The application that proposed entry 801 gets no answer.</li>
+    <li>Machines 2 and 3 choose machine 2 as leader. Its log has entry 801, so that entry stays, and becomes committed after all.</li>
   </ol>
-  <p>For the user, both cases look the same: it got no answer. In the first case its entry is gone, in the second it is accepted, and the user cannot tell which. That is why a proposal can end in three ways, not two:</p>
-  <ul>
-    <li><strong>Accepted.</strong> The entry is safe, with its index.</li>
-    <li><strong>Refused.</strong> The entry is certainly not in the log, and never will be. Tourbillon only says this when it is sure: for example, the copy was not the leader when the entry arrived, or storage was full.</li>
-    <li><strong>Unknown.</strong> Tourbillon cannot say. That is the case when the answer does not come in time, when the connection to the leader breaks, or when the leader stops leading while the entry is under way.</li>
-  </ul>
-  <p>After "unknown", the user simply proposes the same entry again. If the first one was accepted after all, the entry is now in the log twice, so the user must recognise the second one as a duplicate when it applies it and skip it. Remontoire and MSSP both do that, by the id of the message or event in the entry.</p>
+  <p>For the application both cases look the same, and it cannot tell which one happened. The Raft paper leaves this to the client. I made it part of the answer: a proposal ends in one of three ways.</p>
+  <dl class="glossary">
+    <dt>Committed</dt>
+    <dd>The entry is safe, with its index.</dd>
+    <dt>Refused</dt>
+    <dd>The entry is certainly not in the log, and never will be. Tourbillon only says this when it is sure: for example, the replica was not the leader when the entry arrived, storage was full, or the write failed and was cut back.</dd>
+    <dt>Unknown</dt>
+    <dd>Tourbillon cannot say. The answer did not come in time, the connection to the leader broke, or the leader stopped leading while the entry was under way. The entry itself may still be committed later, and then the feed hands it like any other.</dd>
+  </dl>
+  <p>After "unknown", the application simply proposes the same entry again. If the first one was committed after all, the entry is now in the log twice, so the application must recognise the second as a duplicate when it applies it, and skip it. Remontoire and MSSP both do that by the id of the message or event in the entry.</p>
+  <p>A failed write at the leader also ends "refused": the write was cut back and nothing was sent, so we are sure the entry is in no log, and the replica stays leader. If cutting back fails too, the log reports itself broken (chapter 2): the replica refuses every proposal for the same reason and stops taking part, and the others go on as if it had crashed.</p>
 
-  <h2>A copy that is behind</h2>
-  <p>A follower that was down for a while, or is slower, misses entries. The leader keeps track of how far every follower is, and sends it what it misses, oldest first. If the user on the leader has already let go of those entries (chapter 3), the leader sends the snapshot of its user instead, and then the entries after it.</p>
+  <h2>A replica that is behind</h2>
+  <p>A follower that was down for a while, or is slower, misses entries. The leader keeps track of how far every follower is and sends it what it misses, oldest first. If the application on the leader has already let go of those entries (chapter 3), the leader sends its snapshot instead, and then the entries after it.</p>
 
-  <h2>When a copy is full</h2>
-  <p>Every machine has its own disk, so one copy can be full while the others still have room. A full follower follows the rules of chapter 2 too: it does not store what the leader sends, answers "full", and the leader counts it as a copy that does not have the entry. Whether an entry may use the reserve is stored in the entry itself, so every copy decides the same way. An example with three machines:</p>
+  <h2>When a replica is full</h2>
+  <p>Every machine has its own disk, so one replica can be full while the others still have room. A full follower follows the rules of chapter 2 too: it does not store what the leader sends, answers "full", and the leader counts it as a replica that does not have the entry. Whether an entry may use the reserve is stored in the entry itself, so every replica decides the same way. An example with three machines:</p>
   <ol class="steps">
-    <li>The disk of machine 3 is full. Machines 1 (the leader) and 2 still have room. A new entry is on 2 of 3 disks: accepted. The group goes on, as if machine 3 were down.</li>
-    <li>Now machine 2 is full too. Only the leader has room, 1 of 3: no new entry can reach a majority.</li>
+    <li>The disk of machine 3 is full. Machines 1 (the leader) and 2 still have room. A new entry is on 2 of 3 disks: committed. The group goes on, as if machine 3 were down.</li>
+    <li>Now machine 2 is full too. Only the leader has room, 1 of 3, so no new entry can reach a majority.</li>
     <li>The leader knows that from the answers "full", and refuses new entries straight away with "storage full", before it writes them. That refusal is certain: the entry is in no log. Entries that may use the reserve still go through, as long as a majority has reserve left.</li>
   </ol>
 
   <h2>When no majority is left</h2>
-  <p>If too many copies are down or cut off, for example 2 of 3, no majority can store an entry and no copy can win an election. The group then accepts nothing, and every proposal is refused with an error. Nothing accepted is lost; once enough copies are back, the group chooses a leader and goes on.</p>
-  <p>When the network splits a group in two, only the side with a majority can go on. A leader on the other side can no longer get anything accepted: it notices that it no longer hears from a majority, stops leading, and refuses proposals. So there may briefly be a copy that still thinks it leads, but only one leader can ever get entries accepted.</p>
+  <p>If too many replicas are down or cut off, for example 2 of 3, no majority can store an entry and no replica can win an election. The group then commits nothing, and every proposal ends with an error. Nothing committed is lost; once enough replicas are back, the group chooses a leader and goes on. Tourbillon does not protect against losing a majority of the replicas at once; more replicas protect against more failures.</p>
+  <p>When the network splits a group in two, only the side with a majority can go on. A leader on the other side gets no more answers, but it cannot tell whether the network split, the others are down, or the answers are only late. In plain Raft it keeps taking proposals and writes them to its own log; since they are in a log, it cannot say "refused", and they can only end "unknown". So I added CheckQuorum from Ongaro's thesis: a leader that has not heard from a majority within an election timeout steps down and refuses proposals. There may briefly be a replica that still thinks it leads, but only one leader can ever get entries committed.</p>
+  <p>Which machines carry the replicas of a group, and which replica should lead, Tourbillon leaves to the application; chapter 5 says how it changes them.</p>
 
   <div class="promises">
     <strong>What must always be true</strong>
     <ul>
-      <li>An accepted entry is on disk on a majority of the copies of its group.</li>
+      <li>A committed entry is on disk on a majority of the replicas of its group.</li>
       <li>A group has at most one leader per term, and only a leader adds entries.</li>
-      <li>A new leader has every accepted entry.</li>
-      <li>Accepted entries are never replaced; an entry that was never accepted may be.</li>
-      <li>Every copy hands its user the same accepted entries in the same order.</li>
-      <li>Without a majority, a group accepts nothing.</li>
+      <li>A new leader has every committed entry.</li>
+      <li>Committed entries are never replaced; an entry that was never committed may be.</li>
+      <li>Every replica hands its application the same committed entries in the same order.</li>
+      <li>Without a majority, a group commits nothing.</li>
       <li>"Refused" means the entry is certainly not in the log; when Tourbillon cannot be sure, the answer is "unknown".</li>
-      <li>A copy stores its term and vote on disk before it answers, and never votes twice in one term.</li>
+      <li>A replica stores its term and vote on disk before it answers, and never votes twice in one term.</li>
     </ul>
   </div>
-
-  <h2>What Tourbillon does not do here</h2>
-  <ul>
-    <li>Tourbillon does not accept an entry without a majority, not even to keep going when machines fail.</li>
-    <li>Tourbillon does not decide on which machines the copies of a group are, or which copy should lead. The user decides that; chapter 5 says how it changes them.</li>
-    <li>Tourbillon does not protect against losing a majority of the copies at once. More copies protect against more failures.</li>
-    <li>A follower does not forward a proposal to the leader by itself; it names the leader, and the user proposes there.</li>
-  </ul>
-
-  <h2>Words used in this chapter</h2>
-  <dl class="glossary">
-    <dt>Group</dt>
-    <dd>One log, kept as a copy on each of several machines.</dd>
-    <dt>Copy</dt>
-    <dd>The log of a group on one machine. Also called a replica.</dd>
-    <dt>Leader, follower</dt>
-    <dd>The copy that takes new entries and hands them on; the other copies, which store what the leader sends.</dd>
-    <dt>Majority</dt>
-    <dd>More than half of the copies of a group: 2 of 3, 3 of 5.</dd>
-    <dt>Term</dt>
-    <dd>The number of an election. Every new election has a higher term; a group has at most one leader per term.</dd>
-    <dt>Unknown</dt>
-    <dd>The outcome of a proposal when Tourbillon cannot say whether it was accepted, for example after a timeout. The user proposes it again and skips the duplicate.</dd>
-  </dl></article>
+</article>
 <nav class="pages">
-  <a href="03-the-users-state.html"><span>← Chapter 3</span></a>
+  <a href="03-state-and-snapshots.html"><span>← Chapter 3</span></a>
   <a href="index.html"><span>Contents</span></a>
-  <a href="05-changing-the-copies.html"><span>Chapter 5 →</span></a>
+  <a href="05-changing-the-replicas.html"><span>Chapter 5 →</span></a>
 </nav>
 </main>
 </body>

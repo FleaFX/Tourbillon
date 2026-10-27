@@ -4,7 +4,7 @@ namespace Tourbillon.Raft;
 
 public class ReplicaElectionTests {
     [Fact]
-    public async Task A_one_copy_group_becomes_leader_on_its_own() {
+    public async Task A_one_replica_group_becomes_leader_on_its_own() {
         await using var h = await ReplicaHarness.MakeAsync(members: new[] { "machine-1" });
         await h.LoadAsync();
 
@@ -14,7 +14,7 @@ public class ReplicaElectionTests {
         h.Replica.Role.Should().Be(ReplicaRole.Leader);
         h.Replica.Term.Should().Be(1UL);
         h.Replica.Leader.Should().Be("machine-1");
-        h.Replica.IsReady.Should().BeTrue();  // the NoOp of a one-copy group commits in the same turn
+        h.Replica.IsReady.Should().BeTrue();  // the NoOp of a one-replica group commits in the same turn
         h.Transport.VoteRequests.Should().BeEmpty();  // no one to ask
     }
 

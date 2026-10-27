@@ -5,7 +5,7 @@ using Tourbillon.Log;
 namespace Tourbillon.Raft;
 
 /// <summary>
-/// The term and vote of one copy on disk, in the state file vote.state next to the
+/// The term and vote of one replica on disk, in the state file vote.state next to the
 /// segments of its log: the term u64, the length of the name u16 (0: no vote) and
 /// the name in UTF-8. A missing file loads as term 0 and no vote; a damaged one
 /// refuses.
@@ -18,7 +18,7 @@ sealed class FileVoteStore : IVoteStore {
     readonly string _directory;
 
     /// <summary>
-    /// The vote store of the copy whose log lives in <paramref name="directory"/>,
+    /// The vote store of the replica whose log lives in <paramref name="directory"/>,
     /// through <paramref name="fileSystem"/>.
     /// </summary>
     public FileVoteStore(IFileSystem fileSystem, string directory) {

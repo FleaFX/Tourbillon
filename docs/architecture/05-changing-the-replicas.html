@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Changing the replicas</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<article>
+  <p class="kicker">Chapter 5</p>
+  <h1>Changing the replicas</h1>
+
+  <p>The replicas of a group are not fixed. Machines are added, taken away, or break and do not come back, and the group has to keep running while that happens. For this I use what Ongaro's thesis adds to Raft: membership changes one replica at a time, learners, leadership transfer, and PreVote, which keeps a replica that was away from disturbing the group.</p>
+
+  <h2>Why the replicas change</h2>
+  <p>When a machine joins, some groups get a replica on it, and when a machine leaves or breaks for good, its replicas have to move elsewhere. Which machines carry which replicas is up to the application; Remontoire, for example, spreads its partitions over its machines by itself. Tourbillon only makes the change safe: it never adds or removes a replica on its own.</p>
+
+  <h2>One replica at a time</h2>
+  <p>Which replicas a group has is itself kept in the log. To change it, the application asks the leader, and the leader adds a change entry: "from now on, the replicas are these". That entry is copied and committed like any other, so every replica learns about the change at the same place in the log.</p>
+  <p>Each change entry adds or removes exactly one replica, and the leader takes the next change only once the previous one is committed. With one replica more or less, every majority of the old replicas and every majority of the new replicas still share at least one replica, so the old and the new replicas can never choose two different leaders at the same time. A new leader takes its first change only once its empty entry (chapter 4) is committed. Until then, a change entry of an earlier leader may still be in some logs without being committed, and a new change on top of it could break that overlap.</p>
+  <p>The Raft paper itself describes another way, joint consensus, which can change several replicas in one step by going through a configuration in which both the old and the new majority must agree. Ongaro's thesis describes the one-at-a-time way as the simpler one. I chose it for that simplicity already in the first design of Remontoire, and kept it here: every change the applications need, adding, removing or moving a replica, is one or two such steps, and joint consensus would add an in-between configuration that also has to be right and tested.</p>
+
+  <h2>Adding a replica</h2>
+  <p>A new replica starts empty, and while it catches up, it cannot help store new entries. If it counted for the majority straight away, the group could stop sooner than before. An example:</p>
+  <ol class="steps">
+    <li>A group has replicas on machines 1, 2 and 3. It needs 2 of 3, so one machine may fail.</li>
+    <li>A replica on machine 4 is added and counts at once. Now the group needs 3 of 4.</li>
+    <li>Machine 4 is still empty and stores nothing new until it has caught up. So in practice, machines 1, 2 and 3 must all answer.</li>
+    <li>Machine 3 fails. Only 1 and 2 are left that can store entries: 2 of 4, no majority. The group stops, although only one machine failed.</li>
+  </ol>
+  <p>So a new replica first joins as a learner, which Ongaro's thesis calls a non-voting member. A learner gets everything the other replicas get, the snapshot first if the start of the log was already let go (chapter 3), then the entries. But it does not vote and does not count for the majority: in the example, the group keeps needing 2 of 3 while machine 4 catches up.</p>
+  <p>The application does not see this in-between step. It asks the leader to add a replica on machine 4; we add it as a learner, follow how far it has caught up, and once the learner misses no more than what the leader sends in one go, make it a full member with a second change entry. Only then does the application hear that the replica was added. If the learner does not catch up, because its machine is too slow for example, it stays a learner, and the application can remove it again. How far every replica is, the application can always see in the measurements (chapter 6).</p>
+  <p>In some Raft implementations, the operator promotes a learner, and the promotion fails while the learner is behind. I let Tourbillon choose the moment. The application already decided that the replica comes, and since Tourbillon follows the replication itself, it knows when the learner has caught up. Otherwise every application would have to keep asking and retrying, based on the measurements.</p>
+
+  <h2>Removing and moving a replica</h2>
+  <p>Removing a replica is one change entry. Once it is committed, the removed replica no longer takes part, and the application can drop it from its machine, which deletes its files. If the leader itself is removed, it keeps leading until the change is committed and then steps down, so that the others choose a new leader among themselves.</p>
+  <p>Moving a replica to another machine is two steps: add a replica on the new machine, and once that is done (it caught up as a learner and became a full member), remove the old one. The group keeps running all the time and never has fewer full replicas than before. A replica whose disk was damaged (chapter 2), or whose machine will not come back, is replaced the same way. When to do that is the application's choice; Remontoire, for example, first waits a set time, so that a restart costs nothing extra.</p>
+
+  <h2>Sending a snapshot</h2>
+  <p>A learner, or a replica that fell far behind, may need the application's snapshot (chapter 3). The application on the leader hands it to Tourbillon as a list of files; we send them in pieces, and the application on the other machine starts from them. If the sending breaks off, it starts again from the first piece. MSSP's snapshot can be large and take a while; meanwhile the group goes on as usual.</p>
+
+  <h2>Leadership transfer</h2>
+  <p>Sometimes the application wants another replica to lead: to spread the leaders of many groups evenly over the machines, or before a machine restarts for an update. Waiting until the leader is gone would cost a pause and a few "unknown" answers (chapter 4). So the application can ask the leader to hand over to a chosen replica:</p>
+  <ol class="steps">
+    <li><strong>Stop.</strong> The leader stops taking new proposals; they are refused, and the application proposes them again at the new leader.</li>
+    <li><strong>Catch up.</strong> The leader makes sure the chosen replica has every entry it has.</li>
+    <li><strong>Hand over.</strong> The leader tells the chosen replica to start an election at once (Raft's TimeoutNow). The chosen replica asks for votes with a mark that says the leader asked for it, wins because its log is complete, and leads.</li>
+  </ol>
+  <p>The mark is needed because the other replicas still hear the leader, and with PreVote (below) they would refuse to help start an election. The mark lifts only that one refusal; the rules of chapter 4 still hold, one vote per term and only for a replica whose log is at least as complete. The pause should be much shorter than after a failure, because nobody waits for an election timeout. If the chosen replica does not take over within an election timeout, the old leader takes proposals again.</p>
+
+  <h2>PreVote</h2>
+  <p>A replica that is cut off from the others hears no leader, and in plain Raft it would start one election after another, each with a higher term. When it comes back, that high term makes the real leader step down for nothing, since every replica that sees a higher term must take it over, and a leader that sees one must step down.</p>
+  <p>The replica cannot simply undo an election that got no answer. A real election starts by raising its own term, storing it on disk and voting for itself, and only then asking the others; perhaps a request did arrive somewhere and only the answer got lost. If the replica went back to its old term, it could later vote a second time in the same term, and two leaders would be possible. A term never goes down, so after a minute of trying the replica is many terms ahead.</p>
+  <p>Ongaro's thesis adds PreVote for this: a round before the real election, which changes nothing. The asking replica asks "would you vote for me in the next term?" without raising its own term, and the replicas that answer store no vote. A replica answers no if its log is more complete, and also while it still hears its leader. Only when a majority says yes does the real election start. An example:</p>
+  <ol class="steps">
+    <li>Machine 3 is cut off for a minute. Machines 1 and 2 go on, with machine 1 leading in term 6.</li>
+    <li>Machine 3 hears nothing and sends a PreVote for term 7. Nobody answers, so it does not raise its term. It tries again later.</li>
+    <li>The network is back. Machine 3 sends a PreVote again, and machine 2 answers no, because it hears its leader just fine. That also helps when the network only half works: if machine 3 cannot hear the leader but machine 2 can, machine 2 still says no. Machine 3 stays at its term and soon hears from machine 1 itself.</li>
+  </ol>
+  <p>The same holds for a replica that was removed but keeps running: it gets no from every replica that still hears the leader, and can never make it step down.</p>
+  <p>PreVote also changes the election example of chapter 4 a little. Machine 3 sends a PreVote first, and machine 2 answers no because its log has entry 800, so machine 3 does not even raise its term. Then machine 2 sends a PreVote, machine 3 says yes, and machine 2 leads in term 5 instead of 6, with entry 800.</p>
+
+  <div class="promises">
+    <strong>What must always be true</strong>
+    <ul>
+      <li>The replicas of a group change by one replica at a time, through a committed entry, and a next change waits until the previous one is committed.</li>
+      <li>A new replica is first a learner: it does not vote and does not count for the majority until it has caught up.</li>
+      <li>Adding, removing or moving a replica never loses a committed entry.</li>
+      <li>The group keeps running during a change, as long as a majority of its full replicas is there.</li>
+      <li>Leadership transfer never leads to two leaders that can get entries committed.</li>
+      <li>A replica that hears its leader does not help another replica start an election: it answers no to a PreVote. Only an election the leader itself asked for skips that question.</li>
+    </ul>
+  </div>
+</article>
+<nav class="pages">
+  <a href="04-several-machines.html"><span>← Chapter 4</span></a>
+  <a href="index.html"><span>Contents</span></a>
+  <a href="06-hosting-and-api.html"><span>Chapter 6 →</span></a>
+</nav>
+</main>
+</body>
+</html>

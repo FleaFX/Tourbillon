@@ -12,26 +12,19 @@
   <p class="kicker">Chapter 1</p>
   <h1>What is Tourbillon</h1>
 
-
-  <div class="summary">
-    <strong>In three sentences</strong>
-    <p>Tourbillon keeps a log on disk that survives a crash, and copies it over several machines so that they agree on what is in it, even when one of them fails. A program hands an entry to Tourbillon; once Tourbillon calls it accepted, the entry is safe, and every machine gets it at the same place in the same order. Tourbillon does not know what the entries mean: the program that uses it turns them into its own state.</p>
-  </div>
+  <p>Tourbillon is a .NET library that keeps a log on disk and copies it over a few machines with Raft, so that the log survives a crash and the failure of a machine. Here I explain which problem that solves, what I take from Raft and what I add, and what I leave to the program around it.</p>
 
   <h2>The problem</h2>
-  <p>Some programs must never forget what they were told. A replicated database must keep every change it confirmed; an event store must keep every event it accepted; a message broker must keep every message until it is delivered. Such a program needs two things:</p>
-  <ul>
-    <li><strong>A place where written means written.</strong> Once it has said "stored", a crash or a power failure must not take it back.</li>
-    <li><strong>Agreement between machines.</strong> With several machines, so that one can fail without anything stopping, they must agree on what was written and in which order, also when a machine fails halfway or the network between them breaks.</li>
-  </ul>
-  <p>Both are hard to get right, and a mistake rarely shows: everything works, until one day a power failure or an unlucky moment loses something that was called safe. Two programs need both: the event store MSSP and the message broker Remontoire. So the hard part is built once, tested hard, and shared: that is Tourbillon.</p>
+  <p>Some programs must never forget what they were told. Most such programs belong to one family: in one form or another, they are a replicated or distributed database. They all need two things. The first is a place where written means written: once the program has said "stored", a crash or a power failure must not take it back. The second is agreement between machines. With several machines one can fail without anything stopping, but only if they agree on what was written and in which order, also when a machine fails halfway or the network between them breaks.</p>
+  <p>Both are hard to get right, and a mistake rarely shows. Everything works until the day a power failure, at an unlucky moment, loses something that was called safe. I have two programs that need both, the event store MSSP and the message broker Remontoire, and each had its own attempt at it. Side by side, the two attempts showed me what each got right and where it fell short, and that both programs need the same thing underneath. So I wrote that part again, this time as a component of its own that both programs use, and called it Tourbillon.</p>
+  <p>I did not start from an existing Raft library for .NET, such as DotNext. MSSP and Remontoire are hobby projects, and there are alternatives for both of them too. I build them because I want to build them, and Tourbillon is their core. It is exactly the part I want to build and learn from, so I do not hand it to an outside component.</p>
 
   <h2>What Tourbillon does</h2>
-  <p>A program that uses Tourbillon, the user, does not write to disk or talk to other machines itself. It hands its entries to Tourbillon, and gets back the accepted entries, in order, to build its state from.</p>
+  <p>MSSP and Remontoire build Tourbillon in, and leave the disk and the other machines to it. They hand each piece of data they want to keep to Tourbillon as an entry, a piece of bytes that Tourbillon never reads, and get the entries back once they are safe, in order. From those they build their state: whatever they keep, such as the events of a stream or how far a reader got.</p>
 
   <figure>
     <svg viewBox="0 0 680 250" role="img" aria-labelledby="fig1-title">
-      <title id="fig1-title">The user hands an entry to Tourbillon, Tourbillon stores it on disk on most of its machines, and then hands the accepted entry back to the user on every machine, in order.</title>
+      <title id="fig1-title">The application hands an entry to Tourbillon, Tourbillon stores it on disk on most of its machines, and then hands the committed entry back to the application on every machine, in order.</title>
       <defs>
         <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/>
@@ -39,7 +32,7 @@
       </defs>
 
       <rect class="box" x="1" y="65" width="168" height="120" rx="8"/>
-      <text class="label" x="85" y="118" text-anchor="middle">The user</text>
+      <text class="label" x="85" y="118" text-anchor="middle">The application</text>
       <text class="note" x="85" y="140" text-anchor="middle">such as MSSP</text>
       <text class="note" x="85" y="158" text-anchor="middle">or Remontoire</text>
 
@@ -48,80 +41,69 @@
       <rect class="box" x="276" y="64" width="160" height="44" rx="6"/>
       <text class="note" x="356" y="91" text-anchor="middle">machine 1: log on disk</text>
       <rect class="box" x="276" y="118" width="160" height="44" rx="6"/>
-      <text class="note" x="356" y="145" text-anchor="middle">machine 2: copy</text>
+      <text class="note" x="356" y="145" text-anchor="middle">machine 2: replica</text>
       <rect class="box" x="276" y="172" width="160" height="44" rx="6"/>
-      <text class="note" x="356" y="199" text-anchor="middle">machine 3: copy</text>
+      <text class="note" x="356" y="199" text-anchor="middle">machine 3: replica</text>
 
       <rect class="box" x="511" y="65" width="168" height="120" rx="8"/>
       <text class="label" x="595" y="118" text-anchor="middle">Its state</text>
       <text class="note" x="595" y="140" text-anchor="middle">built from the</text>
-      <text class="note" x="595" y="158" text-anchor="middle">accepted entries</text>
+      <text class="note" x="595" y="158" text-anchor="middle">committed entries</text>
 
       <path class="arrow" d="M171,100 L252,100"/>
       <text class="step" x="212" y="89" text-anchor="middle">1 propose</text>
 
       <path class="arrow" d="M252,150 L171,150"/>
-      <text class="step" x="212" y="172" text-anchor="middle">2 accepted</text>
+      <text class="step" x="212" y="172" text-anchor="middle">2 committed</text>
 
       <path class="arrow" d="M458,125 L507,125"/>
       <text class="step" x="483" y="114" text-anchor="middle">3</text>
     </svg>
-    <figcaption>Figure 1. The user proposes an entry, Tourbillon accepts it once it is safe, and hands it back in order to build the user's state.</figcaption>
+    <figcaption>Figure 1. The application proposes an entry, Tourbillon commits it once it is safe, and hands it back in order to build the application's state.</figcaption>
   </figure>
 
   <ol class="steps">
-    <li><strong>Propose.</strong> The user hands an entry to Tourbillon: a piece of bytes, such as an event to store or an acknowledgement of a message.</li>
-    <li><strong>Accepted.</strong> Tourbillon writes the entry to disk, on most of its machines when there are several, and only then answers "accepted", with the number of the entry in the log. If that is not possible, the user gets an error, and nothing was accepted.</li>
-    <li><strong>Apply.</strong> On every machine, Tourbillon hands the accepted entries to the user, in the order of the log. The user applies them to its own state. Because every machine gets the same entries in the same order, they all end up with the same state.</li>
+    <li>The application proposes an entry: it hands Tourbillon a piece of bytes, such as an event to store or the acknowledgement of a message.</li>
+    <li>Tourbillon writes the entry to disk, on most of its machines when there are several, and only then answers that it is committed, with its index: the number of the entry in the log, counting from 1. If that is not possible, the application gets an error, and nothing was committed.</li>
+    <li>On every machine, Tourbillon hands the committed entries to the application in the order of the log, and the application applies them to its state. Every machine gets the same entries in the same order, so they all end up with the same state.</li>
   </ol>
-  <p>One machine is enough to use Tourbillon. It then keeps one log, without copies, and every promise of chapter 2 still holds. More machines only add that one of them may fail (chapter 4).</p>
+  <p>I wanted Tourbillon to grow with the application: a single machine to start with, and a cluster of several machines once the application must keep running when one of them fails. On one machine Tourbillon keeps one log without replicas, and every promise of chapter 2 holds there too; chapter 4 adds the other machines. That is also why the log is not a package of its own. A log without Raft is simply Tourbillon on one machine, and none of the programs I build would use the log alone.</p>
+
+  <h2>Raft, and what Tourbillon adds</h2>
+  <p>The agreement between machines is Raft, the consensus algorithm of Diego Ongaro and John Ousterhout. One machine, the leader, takes every new entry and copies it to the others; an entry counts as safe once a majority of the machines has it on disk, and when the leader fails, the others hold an election and choose a new one. Chapter 4 explains how that works and why it never loses a committed entry.</p>
+  <p>The Raft paper describes the core. Ongaro's thesis adds what a system in production needs, and I take most of it: PreVote, so that a machine that was cut off cannot disturb the group when it comes back; CheckQuorum, so that a leader that no longer hears a majority steps down; leadership transfer; and membership changes one replica at a time, with learners that catch up before they vote. Chapters 4 and 5 describe each of them.</p>
+  <p>Some choices the papers leave open, and there I chose my own answer. None of them is new to distributed systems, but they decide what the application can count on:</p>
+  <ul>
+    <li>a proposal ends in one of three ways, committed, refused or unknown, and "refused" is only said when it is certain (chapter 4);</li>
+    <li>a full disk refuses new entries without touching committed ones, with a reserve for the entries that help free space, also when only some replicas are full (chapters 2 and 4);</li>
+    <li>entries that arrive while the disk is busy share one write, without a timer, and recovery tells a half-finished write from damage (chapter 2);</li>
+    <li>Tourbillon makes a learner a full member by itself once it has caught up, where some Raft implementations leave that to the operator (chapter 5);</li>
+    <li>the application gets no copy of its own of the committed entries, and the test package catches an application that forgets to copy them (chapter 6).</li>
+  </ul>
+  <ul>
+    <li>Diego Ongaro and John Ousterhout, <a href="https://raft.github.io/raft.pdf">In Search of an Understandable Consensus Algorithm</a>, USENIX ATC 2014.</li>
+    <li>Diego Ongaro, <a href="https://purl.stanford.edu/qr033xr6097">Consensus: Bridging Theory and Practice</a>, PhD thesis, Stanford University, 2014.</li>
+  </ul>
 
   <div class="promises">
     <strong>What must always be true</strong>
     <ul>
-      <li>An entry Tourbillon called accepted is not lost by a crash or a power failure, and not by the failure of fewer than half of the machines.</li>
-      <li>An accepted entry never changes, and keeps its number in the log.</li>
-      <li>Every machine hands the user the same accepted entries, in the same order, and never an entry that was not accepted.</li>
-      <li>An accepted entry stays until the user says it may go (chapter 3).</li>
+      <li>An entry Tourbillon called committed is not lost by a crash or a power failure, and not by the failure of fewer than half of the machines.</li>
+      <li>A committed entry never changes, and keeps its index in the log.</li>
+      <li>Every machine hands the application the same committed entries, in the same order, and never an entry that was not committed.</li>
+      <li>A committed entry stays until the application lets go of it (chapter 3).</li>
     </ul>
   </div>
 
-  <h2>Who uses it</h2>
-  <ul>
-    <li><strong>Remontoire</strong>, the message broker, keeps every partition of a stream as a log of its own in Tourbillon, and also its register: what it knows about its machines, streams and groups. The messages themselves stay in the log until the retention of their stream lets them go.</li>
-    <li><strong>MSSP</strong>, the event store, keeps one log for all its events. Its own storage on disk is built from that log. MSSP moves onto Tourbillon after its own architecture has been thought through again.</li>
-  </ul>
-
   <h2>What Tourbillon is not</h2>
-  <ul>
-    <li><strong>Not a database.</strong> Tourbillon never reads what is in an entry, and cannot be searched. Finding things is the job of the user's state.</li>
-    <li><strong>Not a product you install.</strong> It is a library. The user builds it in, and the application that hosts the user decides where it runs.</li>
-    <li><strong>Not a network server.</strong> Tourbillon does not open a network port. The traffic between its machines runs through endpoints that the host puts in its own web application, and the host protects that traffic.</li>
-    <li><strong>Not a judge of what may go.</strong> Tourbillon has no retention rules of its own: the user decides up to where the start of the log may be removed.</li>
-    <li><strong>Not a protection against a machine of its own that lies.</strong> Tourbillon trusts every copy of a group: a machine that takes part and does not follow the rules can break every promise in this book. The host makes sure that only its own machines can take part (chapter 6).</li>
-  </ul>
+  <p>It is not a database. Tourbillon never reads what is in an entry and cannot be searched; finding things is the job of the application's state.</p>
+  <p>It is not a server you install, and it opens no network port. The application builds it in, and it runs wherever the application runs. The traffic between machines goes through endpoints that the host, the process the application runs in, puts in its own web server; the host also protects that traffic (chapter 6).</p>
+  <p>It has no retention rules. The application decides up to where the start of the log may be removed.</p>
+  <p>It is not Byzantine fault tolerant. Raft assumes that a machine can crash or fall silent, but never lies: every machine in a group follows the rules. A machine that takes part and breaks them can break every promise in this book, so the host makes sure that only its own machines can take part.</p>
 
   <h2>The name</h2>
-  <p>A tourbillon is a small turning cage in a mechanical watch. It carries the part that sets the pace, and by turning it all the time, it evens out the small errors that would otherwise make the watch run fast or slow. Tourbillon does the same for its users: machines fail and networks break, but the user keeps one steady log. Remontoire, too, is named after a part of a watch.</p>
-
-  <h2>Words used in this book</h2>
-  <dl class="glossary">
-    <dt>User</dt>
-    <dd>The program that uses Tourbillon, such as MSSP or Remontoire.</dd>
-    <dt>Entry</dt>
-    <dd>One piece of bytes the user hands to Tourbillon. Tourbillon never reads what is in it.</dd>
-    <dt>Log</dt>
-    <dd>The entries, one after the other, in the order Tourbillon accepted them.</dd>
-    <dt>Index</dt>
-    <dd>The number of an entry in its log: 1, 2, 3 and so on.</dd>
-    <dt>Propose</dt>
-    <dd>Hand an entry to Tourbillon, asking it to add the entry to the log.</dd>
-    <dt>Accepted</dt>
-    <dd>Safe: an accepted entry survives a crash, a power failure and the failure of fewer than half of the machines.</dd>
-    <dt>State</dt>
-    <dd>What the user builds from the accepted entries, such as the events of a stream or how far a reader got.</dd>
-  </dl>
-  <p>The next chapters define more words, as they are needed.</p></article>
+  <p>A tourbillon is a small turning cage in a mechanical watch. It carries the part that sets the pace, and by turning all the time it evens out the small errors that would otherwise make the watch run fast or slow. Machines fail and networks break, and the application still sees one steady log. Remontoire, too, is named after a part of a watch.</p>
+</article>
 <nav class="pages">
   <a href="index.html"><span>← Contents</span></a>
   <a href="02-the-log-on-one-machine.html"><span>Chapter 2 →</span></a>

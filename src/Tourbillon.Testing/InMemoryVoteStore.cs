@@ -3,7 +3,7 @@ using Tourbillon.Raft;
 namespace Tourbillon.Testing;
 
 /// <summary>
-/// The term and vote of one copy, in memory; the store survives a crash of the replica
+/// The term and vote of one replica, in memory; the store survives a crash of the replica
 /// that uses it.
 /// </summary>
 sealed class InMemoryVoteStore : IVoteStore {

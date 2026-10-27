@@ -134,7 +134,7 @@ public class ReplicaAppendTests {
     }
 
     [Fact]
-    public async Task Replacing_a_committed_entry_breaks_the_copy() {
+    public async Task Replacing_a_committed_entry_breaks_the_replica() {
         var entries = new[] {
             new Entry(1, 1, EntryKind.Command, EntryFlags.None, new byte[] { 1 }),
             new Entry(2, 2, EntryKind.Command, EntryFlags.None, new byte[] { 2 }),

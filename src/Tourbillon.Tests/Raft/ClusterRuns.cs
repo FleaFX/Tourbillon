@@ -21,7 +21,7 @@ static class ClusterRuns {
         return condition();
     }
 
-    // The name of the current leader, or null while the group has none; a crashed copy
+    // The name of the current leader, or null while the group has none; a crashed replica
     // has no say.
     public static string? Leader(SimulatedCluster cluster) =>
         cluster.Machines.Where(cluster.IsRunning).FirstOrDefault(machine => cluster.Replica(machine).Role == ReplicaRole.Leader);

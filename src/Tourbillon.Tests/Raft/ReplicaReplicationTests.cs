@@ -105,7 +105,7 @@ public class ReplicaReplicationTests {
         gate.SetResult();
         var result = await proposal;
         await turn;
-        result.Status.Should().Be(ProposalStatus.Accepted);
+        result.Status.Should().Be(ProposalStatus.Committed);
         result.Index.Should().Be(2UL);
         h.Replica.CommitIndex.Should().Be(2UL);
     }
@@ -146,7 +146,7 @@ public class ReplicaReplicationTests {
 
         for (var i = 0; i < 100; i++) {
             var result = await proposals[i];
-            result.Status.Should().Be(ProposalStatus.Accepted);
+            result.Status.Should().Be(ProposalStatus.Committed);
             result.Index.Should().Be((ulong)(i + 2));
         }
     }

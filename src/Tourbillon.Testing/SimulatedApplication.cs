@@ -3,13 +3,13 @@ using Tourbillon.Raft;
 namespace Tourbillon.Testing;
 
 /// <summary>
-/// The user of one copy: after every pass of turns it reads what the feed of its copy
+/// The application of one replica: after every pass of turns it reads what the feed of its replica
 /// hands out, checks every batch starts right after the one before, without gaps, and
 /// copies the entries it keeps. It stores its state — D, the last index it applied —
 /// at seeded moments of applying; a crash loses what it applied after its last store,
-/// and the restart of its copy opens the group with that D.
+/// and the restart of its replica opens the group with that D.
 /// </summary>
-sealed class SimulatedUser {
+sealed class SimulatedApplication {
     readonly string _machine;
     readonly Random _random;
     readonly List<Entry> _applied = new();
@@ -17,27 +17,27 @@ sealed class SimulatedUser {
     ulong _stored;
 
     /// <summary>
-    /// The user of one copy, on <paramref name="random"/> for the moments it stores
+    /// The application of one replica, on <paramref name="random"/> for the moments it stores
     /// its state.
     /// </summary>
-    public SimulatedUser(string machine, Random random) {
+    public SimulatedApplication(string machine, Random random) {
         _machine = machine;
         _random = random;
     }
 
     /// <summary>
-    /// The index a restart of this copy opens its group with: the last index this
-    /// user stored.
+    /// The index a restart of this replica opens its group with: the last index this
+    /// application stored.
     /// </summary>
     public ulong Stored => _stored;
 
     /// <summary>
-    /// The entries this user applied, copied: what the invariant checker sees.
+    /// The entries this application applied, copied: what the invariant checker sees.
     /// </summary>
     public IReadOnlyList<Entry> Applied => _applied;
 
     /// <summary>
-    /// Stores the state now: D is the last index this user applied. The moments of the
+    /// Stores the state now: D is the last index this application applied. The moments of the
     /// simulation are seeded; a test stores when it wants a known D.
     /// </summary>
     public void Store() =>
@@ -48,11 +48,11 @@ sealed class SimulatedUser {
     /// the commit index is past what the feed delivered, one batch at a time, each
     /// starting right after the one before, and every entry copied before the next
     /// read. A batch that starts elsewhere or has a gap throws
-    /// <see cref="InvariantViolationException"/>: the feed must hand every accepted
+    /// <see cref="InvariantViolationException"/>: the feed must hand every committed
     /// entry, in order, without gaps, also after a restart.
     /// </summary>
     public void Read(Replica replica) {
-        var feed = replica.Feed ?? throw new InvalidOperationException($"The copy '{_machine}' runs without a feed.");
+        var feed = replica.Feed ?? throw new InvalidOperationException($"The replica '{_machine}' runs without a feed.");
         var applied = false;
         while (replica.CommitIndex > feed.Delivered) {
             var expected = feed.Delivered + 1;
@@ -85,7 +85,7 @@ sealed class SimulatedUser {
     }
 
     /// <summary>
-    /// The copy crashed: what this user applied after its last store is lost, and its
+    /// The replica crashed: what this application applied after its last store is lost, and its
     /// list of applied entries ends at the stored D.
     /// </summary>
     public void Crash() {

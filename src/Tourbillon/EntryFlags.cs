@@ -1,7 +1,7 @@
 namespace Tourbillon;
 
 /// <summary>
-/// Facts about an entry that every copy must decide the same way, so they are stored
+/// Facts about an entry that every replica must decide the same way, so they are stored
 /// in it.
 /// </summary>
 [Flags]

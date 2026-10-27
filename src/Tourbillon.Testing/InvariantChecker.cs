@@ -5,7 +5,7 @@ namespace Tourbillon.Testing;
 /// <summary>
 /// Checks the invariants of the group over the whole run so far: at most one leader per
 /// term, a leader that never overwrites or removes entries of its own log, same index and
-/// term meaning identical up to there, every user applying the same entry at an index,
+/// term meaning identical up to there, every application applying the same entry at an index,
 /// a committed entry in the log of every later leader, and a refused proposal in no log.
 /// A violation throws <see cref="InvariantViolationException"/> with a dump of every
 /// machine.
@@ -17,11 +17,11 @@ sealed class InvariantChecker {
     // Per machine, while it stays leader in one term: its log at the previous check.
     readonly Dictionary<string, LeaderLog> _leaderLogs = new();
 
-    // Per index, the term and payload first seen applied there, by any machine's user,
+    // Per index, the term and payload first seen applied there, by any machine's application,
     // and the term of that machine when it reported the entry.
     readonly SortedDictionary<ulong, CommittedEntry> _appliedByIndex = new();
 
-    // Per machine, how far its user's applied entries were verified.
+    // Per machine, how far its application's applied entries were verified.
     readonly Dictionary<string, int> _verifiedApplied = new();
 
     // The payloads of the proposals that were refused: in no log, ever.
@@ -61,7 +61,7 @@ sealed class InvariantChecker {
         }
     }
 
-    // While a copy stays leader in one term, its log starts with its log at the previous
+    // While a replica stays leader in one term, its log starts with its log at the previous
     // check: a leader never overwrites or removes entries of its own log.
     void CheckLeaderLogs(IReadOnlyList<MachineState> machines) {
         foreach (var machine in machines) {
@@ -112,14 +112,14 @@ sealed class InvariantChecker {
     }
 
     // Invariant 9: every replica applies the same entry at a given index. What the
-    // users applied through the feed decides: one map of index to (term, payload)
+    // applications applied through the feed decides: one map of index to (term, payload)
     // over the whole run, and every applied entry of every machine — also again after
     // a restart — must match it, and follow the one before without a gap.
     void CheckApplied(IReadOnlyList<MachineState> machines) {
         foreach (var machine in machines) {
             var applied = machine.Applied;
 
-            // A crash rolled the user back to its stored D: verify from there again.
+            // A crash rolled the application back to its stored D: verify from there again.
             _verifiedApplied.TryGetValue(machine.Name, out var from);
             if (from > applied.Count)
                 from = applied.Count;
@@ -127,7 +127,7 @@ sealed class InvariantChecker {
             for (var i = from; i < applied.Count; i++) {
                 var entry = applied[i];
                 if (entry.Index != (ulong)i + 1)
-                    throw Violation($"The user of '{machine.Name}' applied entry {entry.Index} where entry {i + 1} belongs: the feed skipped an index — after a restart it must start at its D + 1.", machines);
+                    throw Violation($"The application of '{machine.Name}' applied entry {entry.Index} where entry {i + 1} belongs: the feed skipped an index — after a restart it must start at its D + 1.", machines);
 
                 if (_appliedByIndex.TryGetValue(entry.Index, out var committed)) {
                     if (committed.Term != entry.Term || !committed.Payload.AsSpan().SequenceEqual(entry.Payload.Span))
@@ -142,9 +142,9 @@ sealed class InvariantChecker {
         }
     }
 
-    // A committed entry is in the log of every later leader. A user applies an entry
-    // only once its copy committed it, and a copy learns a commit only from a leader of
-    // its own term, so the term of the machine whose user first applied it is a term
+    // A committed entry is in the log of every later leader. An application applies an entry
+    // only once its replica committed it, and a replica learns a commit only from a leader of
+    // its own term, so the term of the machine whose application first applied it is a term
     // whose leader has the entry: every leader of that term or later has it too. A
     // leader of an earlier term is a stale believer and is exempt.
     void CheckLaterLeaders(IReadOnlyList<MachineState> machines) {
@@ -219,11 +219,11 @@ sealed class InvariantChecker {
     sealed record LeaderLog(ulong Term, IReadOnlyList<Entry> Entries);
 
     /// <summary>
-    /// A committed entry: its term and payload, as first seen applied by the user of a
+    /// A committed entry: its term and payload, as first seen applied by the application of a
     /// machine, and the term of that machine then.
     /// </summary>
     /// <param name="Term">The term of the entry.</param>
     /// <param name="Payload">Its payload, copied.</param>
-    /// <param name="CommitTerm">The term of the machine whose user first applied it.</param>
+    /// <param name="CommitTerm">The term of the machine whose application first applied it.</param>
     sealed record CommittedEntry(ulong Term, byte[] Payload, ulong CommitTerm);
 }
